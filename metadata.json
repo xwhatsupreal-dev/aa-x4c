@@ -1,0 +1,6 @@
+{
+  "name": "AA Vault — เว็บเช็คของ Anime Adventures",
+  "description": "เว็บเช็คของ กระเป๋าไอเทม ทีม 6 ตัว และติดตามรางวัลหลังจบด่านแบบเรียลไทม์สำหรับแมพ Anime Adventures พร้อมสคริปต์ Lua ซิงค์อัตโนมัติ",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
