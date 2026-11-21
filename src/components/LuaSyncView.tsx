@@ -53,7 +53,10 @@ export function LuaSyncView({
   const [keyInput, setKeyInput] = useState(syncKey);
   const [intervalSec, setIntervalSec] = useState(10);
   const [showInGameGui, setShowInGameGui] = useState(true);
+  const [copiedLoader, setCopiedLoader] = useState(false);
+  const [copiedRawUrl, setCopiedRawUrl] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
+  const [showFullCode, setShowFullCode] = useState(false);
 
   // Optional advanced panel (collapsed by default so users don't need to enter any Cloudflare link!)
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -78,6 +81,18 @@ export function LuaSyncView({
   const activeSyncEndpoint = cloudflareUrl
     ? `${cloudflareUrl.replace(/\/$/, '')}/api/sync`
     : `${defaultOrigin}/api/sync`;
+
+  const rawScriptUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    if (syncKey && syncKey !== 'main') params.set('key', syncKey);
+    if (intervalSec !== 10) params.set('interval', String(intervalSec));
+    if (!showInGameGui) params.set('gui', '0');
+    if (cloudflareUrl) params.set('endpoint', `${cloudflareUrl.replace(/\/$/, '')}/api/sync`);
+    const qs = params.toString();
+    return `${defaultOrigin}/api/script${qs ? `?${qs}` : ''}`;
+  }, [defaultOrigin, syncKey, intervalSec, showInGameGui, cloudflareUrl]);
+
+  const shortLoadstring = `loadstring(game:HttpGet("${rawScriptUrl}"))()`;
 
   const luaScript = useMemo(
     () =>
@@ -112,6 +127,26 @@ export function LuaSyncView({
     const nextKey = `aa-${randomPart}`;
     setKeyInput(nextKey);
     onChangeSyncKey(nextKey);
+  };
+
+  const handleCopyLoader = async () => {
+    try {
+      await navigator.clipboard.writeText(shortLoadstring);
+      setCopiedLoader(true);
+      setTimeout(() => setCopiedLoader(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCopyRawUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(rawScriptUrl);
+      setCopiedRawUrl(true);
+      setTimeout(() => setCopiedRawUrl(false), 2000);
+    } catch {
+      // ignore
+    }
   };
 
   const handleCopyScript = async () => {
@@ -235,10 +270,10 @@ export function LuaSyncView({
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-50">
-          สคริปต์เชื่อมต่อเกม (ซิงค์อัตโนมัติ)
+          สคริปต์เชื่อมต่อเกม (1 บรรทัดพร้อมรัน)
         </h1>
         <p className="mt-1 text-sm text-slate-400">
-          คัดลอกสคริปต์ด้านล่างไปรันในแมพ Anime Adventures ได้เลยโดยไม่ต้องตั้งค่าลิงก์เพิ่ม ข้อมูลทีม 6 ตัว กระเป๋า และของที่ดรอปจะเด้งเข้าเว็บอัตโนมัติทันที
+          เว็บโฮสต์ไฟล์สคริปต์ให้ในตัวแล้ว แค่คัดลอกคำสั่ง <code className="font-mono text-slate-200">loadstring</code> บรรทัดเดียวไปรันใน Anime Adventures ได้เลยโดยไม่ต้องฝาก Pastebin เอง
         </p>
       </div>
 
@@ -253,8 +288,8 @@ export function LuaSyncView({
             </p>
             <p className="mt-1 text-sm font-medium text-slate-100">
               {accounts.length > 0
-                ? `รับข้อมูลจริงแล้ว ${accounts.length} บัญชี (อัปเดตอัตโนมัติ)`
-                : 'กำลังรอข้อมูลจากสคริปต์ในเกม — รันสคริปต์ด้านล่างแล้วหน้านี้จะโหลดข้อมูลให้อัตโนมัติทันที'}
+                ? `บันทึกข้อมูลจริงแล้ว ${accounts.length} บัญชี (ค้างไว้ดูได้ตลอดแม้ออฟไลน์)`
+                : 'กำลังรอข้อมูลจากสคริปต์ในเกม — รันคำสั่งด้านล่างแล้วหน้านี้จะโหลดข้อมูลให้อัตโนมัติทันที'}
             </p>
           </div>
           <span className="text-xs font-mono text-emerald-400 whitespace-nowrap shrink-0">
@@ -292,16 +327,15 @@ export function LuaSyncView({
         )}
       </section>
 
-      {/* Primary Ready-to-Run Lua Script */}
+      {/* Primary 1-Line Loadstring Card */}
       <section className="rounded-xl bg-[#121620] border border-white/[0.08] overflow-hidden">
         <div className="p-5 border-b border-white/[0.08] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-slate-100">
-              สคริปต์ 2K AA Vault (.lua) พร้อมรันทันที
+              สคริปต์แบบสั้น (1 บรรทัด — โฮสต์ตรงบนเว็บนี้)
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5 truncate">
-              ส่งข้อมูลอัตโนมัติไปที่:{' '}
-              <code className="font-mono text-slate-200">{activeSyncEndpoint}</code>
+            <p className="text-xs text-slate-400 mt-0.5">
+              คัดลอกบรรทัดเดียวไปวางในตัวรัน Roblox ได้เลย ไม่ต้องก๊อปโค้ดยาวๆ และไม่ต้องอัปโหลดขึ้น Pastebin
             </p>
           </div>
 
@@ -326,30 +360,76 @@ export function LuaSyncView({
               <option value={10}>ซิงค์ทุก 10 วินาที</option>
               <option value={30}>ซิงค์ทุก 30 วินาที</option>
             </select>
+          </div>
+        </div>
 
+        <div className="p-5 space-y-3 bg-[#0A0D13]">
+          <div className="rounded-lg bg-[#0E121B] border border-white/[0.10] px-4 py-3.5 overflow-x-auto">
+            <code className="text-xs sm:text-sm font-mono text-emerald-300 whitespace-nowrap select-all">
+              {shortLoadstring}
+            </code>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleCopyScript}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap cursor-pointer"
+              onClick={handleCopyLoader}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap cursor-pointer"
             >
-              {copiedScript ? <Check size={14} /> : <Copy size={14} />}
-              <span>{copiedScript ? 'คัดลอกสคริปต์แล้ว' : 'คัดลอกสคริปต์'}</span>
+              {copiedLoader ? <Check size={14} /> : <Copy size={14} />}
+              <span>{copiedLoader ? 'คัดลอกสคริปต์สั้นแล้ว' : 'คัดลอกสคริปต์ (1 บรรทัด)'}</span>
             </button>
 
             <button
               type="button"
-              onClick={handleDownloadLua}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors whitespace-nowrap cursor-pointer"
+              onClick={handleCopyRawUrl}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors whitespace-nowrap cursor-pointer"
             >
-              <Download size={14} />
-              <span>ดาวน์โหลด .lua</span>
+              {copiedRawUrl ? <Check size={14} /> : <Copy size={14} />}
+              <span>{copiedRawUrl ? 'คัดลอกลิงก์แล้ว' : 'คัดลอกลิงก์ Raw'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowFullCode((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-transparent border border-white/[0.08] text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors whitespace-nowrap cursor-pointer"
+            >
+              {showFullCode ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              <span>{showFullCode ? 'ซ่อนโค้ดเต็ม' : 'ดูโค้ดเต็ม / ดาวน์โหลด .lua'}</span>
             </button>
           </div>
         </div>
 
-        <pre className="p-5 overflow-x-auto max-h-[420px] text-xs leading-relaxed font-mono text-slate-300 bg-[#0A0D13]">
-          <code>{luaScript}</code>
-        </pre>
+        {showFullCode && (
+          <div className="border-t border-white/[0.08]">
+            <div className="px-5 py-3 bg-[#121620] border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-slate-400 truncate">
+                ส่งข้อมูลไปที่: <code className="font-mono text-slate-200">{activeSyncEndpoint}</code>
+              </p>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCopyScript}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
+                >
+                  {copiedScript ? <Check size={13} /> : <Copy size={13} />}
+                  <span>{copiedScript ? 'คัดลอกโค้ดเต็มแล้ว' : 'คัดลอกโค้ดเต็ม'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadLua}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
+                >
+                  <Download size={13} />
+                  <span>ดาวน์โหลด .lua</span>
+                </button>
+              </div>
+            </div>
+            <pre className="p-5 overflow-x-auto max-h-[380px] text-xs leading-relaxed font-mono text-slate-300 bg-[#080A0F]">
+              <code>{luaScript}</code>
+            </pre>
+          </div>
+        )}
       </section>
 
       {/* Collapsible Advanced Settings (Optional Sync Key, Cloudflare override, Clipboard fallback) */}

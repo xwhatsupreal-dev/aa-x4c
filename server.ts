@@ -4,6 +4,7 @@ import path from 'node:path';
 import express, { type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import { formatClock, normalizeRarity } from './src/data/aaCatalog.ts';
+import { generateWebSyncLuaScript } from './src/utils/luaGenerator.ts';
 import type {
   AccountSnapshot,
   InventoryItem,
@@ -228,6 +229,31 @@ async function startServer() {
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, serverless: false, provider: 'express', timestamp: Date.now() });
+  });
+
+  // Raw Lua loader endpoint so Roblox executors can run a 1-line loadstring(game:HttpGet(...))()
+  app.get(['/api/script', '/api/script.lua'], (req, res) => {
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
+      .split(',')[0]
+      .trim();
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '')
+      .split(',')[0]
+      .trim();
+    const origin = host ? `${proto}://${host}` : '';
+    const syncKey = sanitizeKey(req.query.key) || 'main';
+    const rawInterval = Number(req.query.interval);
+    const intervalSec = Number.isFinite(rawInterval)
+      ? Math.min(120, Math.max(5, Math.round(rawInterval)))
+      : 10;
+    const showGui = req.query.gui !== '0' && req.query.gui !== 'false';
+    const rawEndpoint = typeof req.query.endpoint === 'string' ? req.query.endpoint.trim() : '';
+    const safeEndpoint =
+      /^https?:\/\/[^\s"'\\]+$/.test(rawEndpoint) ? rawEndpoint : `${origin}/api/sync`;
+
+    const script = generateWebSyncLuaScript(safeEndpoint, syncKey, intervalSec, showGui);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(script);
   });
 
   // List synced accounts for a specific Sync Key
