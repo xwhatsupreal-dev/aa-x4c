@@ -1,17 +1,131 @@
 import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { formatClock, normalizeRarity } from '../src/data/aaCatalog.ts';
-import type {
-  AccountSnapshot,
-  InventoryItem,
-  RewardEntry,
-  RewardTotal,
-  ShareRecord,
-  SyncPayload,
-  TeamUnit,
-} from '../src/types.ts';
 
-type Req = IncomingMessage & { body?: unknown; query?: Record<string, string | string[]> };
+type Rarity =
+  | 'Secret'
+  | 'Exclusive'
+  | 'Mythic'
+  | 'Legendary'
+  | 'Epic'
+  | 'Rare'
+  | 'Uncommon'
+  | 'Common';
+
+interface TeamUnit {
+  slot: number;
+  id: string;
+  name: string;
+  rarity: Rarity;
+  level?: number;
+  shiny?: boolean;
+  traits?: string[];
+  stats?: { dmg?: string; spa?: string; rng?: string };
+}
+
+interface InventoryItem {
+  id: string;
+  name: string;
+  rarity: Rarity;
+  group: string;
+  qty: number;
+  kind: 'normal' | 'unique';
+}
+
+interface RewardEntry {
+  t: string;
+  ts: number;
+  kind: 'item' | 'unit';
+  id: string;
+  name: string;
+  rarity: Rarity;
+  qty: number;
+  src: string;
+}
+
+interface RewardTotal {
+  kind: 'item' | 'unit';
+  id: string;
+  name: string;
+  rarity: Rarity;
+  qty: number;
+}
+
+interface AccountSnapshot {
+  accountId: string;
+  username: string;
+  displayName: string;
+  userId?: number;
+  gold: number;
+  gems: number;
+  level?: number;
+  equipped: TeamUnit[];
+  inventory: InventoryItem[];
+  rewards: RewardEntry[];
+  totals: Record<string, RewardTotal>;
+  uniqueCount: number;
+  normalKindCount: number;
+  lastSyncedAt: number;
+  source: 'lua';
+}
+
+interface ShareRecord {
+  shareId: string;
+  createdAt: number;
+  account: AccountSnapshot;
+}
+
+interface SyncPayload {
+  syncKey?: string;
+  username?: string;
+  displayName?: string;
+  userId?: number;
+  gold?: number;
+  gems?: number;
+  level?: number;
+  equipped?: Array<{
+    slot?: number;
+    id: string;
+    name?: string;
+    rarity?: string;
+    level?: number;
+    shiny?: boolean;
+    traits?: string[] | Record<string, unknown> | string;
+    stats?: { dmg?: string; spa?: string; rng?: string };
+  }>;
+  inventory?: Array<{
+    id: string;
+    name?: string;
+    rarity?: string;
+    group?: string;
+    qty?: number;
+    kind?: 'normal' | 'unique';
+  }>;
+  rewards?: Array<{
+    t?: string;
+    ts?: number;
+    kind?: 'item' | 'unit';
+    id: string;
+    name?: string;
+    rarity?: string;
+    qty?: number;
+    src?: string;
+  }>;
+  uniqueCount?: number;
+  normalKindCount?: number;
+}
+
+type Req = IncomingMessage & { body?: unknown };
+
+const RARITY_ORDER: Rarity[] = [
+  'Secret',
+  'Exclusive',
+  'Mythic',
+  'Legendary',
+  'Epic',
+  'Rare',
+  'Uncommon',
+  'Common',
+];
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -19,7 +133,6 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-// Warm-instance fallback store when neither Cloudflare Worker nor Cloudflare KV REST env vars are configured
 const memoryRooms: Record<string, Record<string, AccountSnapshot>> = {};
 const memoryShares: Record<string, ShareRecord> = {};
 
@@ -34,6 +147,20 @@ function sendJson(res: ServerResponse, data: unknown, status = 200) {
 function sanitizeKey(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   return raw.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+}
+
+function normalizeRarity(input?: string): Rarity {
+  if (!input) return 'Common';
+  const cleaned = input.trim().toLowerCase();
+  return RARITY_ORDER.find((r) => r.toLowerCase() === cleaned) ?? 'Common';
+}
+
+function formatClock(ts: number): string {
+  const d = new Date(ts + 7 * 3600 * 1000);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
 }
 
 function normalizeTraits(traits: unknown): string[] {
@@ -177,7 +304,6 @@ async function readBodyText(req: Req): Promise<string> {
   });
 }
 
-// Direct Cloudflare KV REST API adapter (when CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_KV_NAMESPACE_ID + CLOUDFLARE_API_TOKEN are set on Vercel)
 function getCfKvConfig() {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
   const namespaceId = process.env.CLOUDFLARE_KV_NAMESPACE_ID?.trim();
@@ -240,7 +366,7 @@ export default async function handler(req: Req, res: ServerResponse) {
   const parsedUrl = new URL(req.url || '/', 'http://localhost');
   const pathname = parsedUrl.pathname.replace(/\/+$/, '') || '/';
 
-  // Mode 1: Proxy to configured Cloudflare Worker URL if CLOUDFLARE_WORKER_URL env var is set on Vercel
+  // Mode 1: Proxy to configured Cloudflare Worker URL if set in Vercel Env
   const workerProxyBase = (
     process.env.CLOUDFLARE_WORKER_URL || process.env.VITE_CLOUDFLARE_WORKER_URL || ''
   )
@@ -272,8 +398,7 @@ export default async function handler(req: Req, res: ServerResponse) {
   const hasDirectCfKv = Boolean(getCfKvConfig());
 
   try {
-    // GET /api/health
-    if (req.method === 'GET' && pathname === '/api/health') {
+    if (req.method === 'GET' && (pathname === '/api' || pathname === '/api/index' || pathname === '/api/health')) {
       sendJson(res, {
         ok: true,
         serverless: true,
@@ -284,7 +409,6 @@ export default async function handler(req: Req, res: ServerResponse) {
       return;
     }
 
-    // GET /api/accounts?key=...
     if (req.method === 'GET' && pathname === '/api/accounts') {
       const syncKey = sanitizeKey(parsedUrl.searchParams.get('key'));
       if (!syncKey) {
@@ -297,7 +421,6 @@ export default async function handler(req: Req, res: ServerResponse) {
       return;
     }
 
-    // POST /api/sync
     if (req.method === 'POST' && pathname === '/api/sync') {
       const rawBody = await readBodyText(req);
       let body: SyncPayload;
@@ -338,7 +461,6 @@ export default async function handler(req: Req, res: ServerResponse) {
       return;
     }
 
-    // POST /api/accounts/:accountId/clear-drops
     const clearMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/clear-drops$/);
     if (req.method === 'POST' && clearMatch) {
       const accountId = decodeURIComponent(clearMatch[1]);
@@ -359,7 +481,6 @@ export default async function handler(req: Req, res: ServerResponse) {
       return;
     }
 
-    // DELETE /api/accounts/:accountId
     const delMatch = pathname.match(/^\/api\/accounts\/([^/]+)$/);
     if (req.method === 'DELETE' && delMatch) {
       const accountId = decodeURIComponent(delMatch[1]);
@@ -377,7 +498,6 @@ export default async function handler(req: Req, res: ServerResponse) {
       return;
     }
 
-    // POST /api/share
     if (req.method === 'POST' && pathname === '/api/share') {
       const rawBody = await readBodyText(req);
       let body: { syncKey?: string; accountId?: string };
@@ -402,7 +522,6 @@ export default async function handler(req: Req, res: ServerResponse) {
       return;
     }
 
-    // GET /api/share/:shareId
     const shareMatch = pathname.match(/^\/api\/share\/([^/]+)$/);
     if (req.method === 'GET' && shareMatch) {
       const shareId = decodeURIComponent(shareMatch[1]);
