@@ -85,6 +85,8 @@ export interface AccountSnapshot {
   uniqueCount: number;
   normalKindCount: number;
   lastSyncedAt: number;
+  scriptVersion?: string;
+  syncIntervalSec?: number;
   source: 'lua';
 }
 
@@ -133,4 +135,6 @@ export interface SyncPayload {
   }>;
   uniqueCount?: number;
   normalKindCount?: number;
+  scriptVersion?: string;
+  syncIntervalSec?: number;
 }

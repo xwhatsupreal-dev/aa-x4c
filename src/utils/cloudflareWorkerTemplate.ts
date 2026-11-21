@@ -173,6 +173,14 @@ function buildSnapshot(payload, existing) {
     uniqueCount,
     normalKindCount,
     lastSyncedAt: now,
+    scriptVersion:
+      typeof payload.scriptVersion === 'string' && payload.scriptVersion.trim()
+        ? payload.scriptVersion.trim().slice(0, 24)
+        : existing?.scriptVersion,
+    syncIntervalSec:
+      typeof payload.syncIntervalSec === 'number' && Number.isFinite(payload.syncIntervalSec)
+        ? Math.min(120, Math.max(5, Math.round(payload.syncIntervalSec)))
+        : existing?.syncIntervalSec,
     source: 'lua',
   };
 }

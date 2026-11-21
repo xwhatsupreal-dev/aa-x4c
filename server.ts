@@ -3,7 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
-import { formatClock, normalizeRarity } from './src/data/aaCatalog.ts';
+import {
+  formatClock,
+  normalizeRarity,
+  SCRIPT_UPDATED_AT,
+  SCRIPT_VERSION,
+} from './src/data/aaCatalog.ts';
 import { generateWebSyncLuaScript } from './src/utils/luaGenerator.ts';
 import { fetchRobloxAvatarInfo, isAllowedRobloxCdnUrl } from './src/utils/robloxAvatar.ts';
 import type {
@@ -207,6 +212,14 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     uniqueCount,
     normalKindCount,
     lastSyncedAt: now,
+    scriptVersion:
+      typeof payload.scriptVersion === 'string' && payload.scriptVersion.trim()
+        ? payload.scriptVersion.trim().slice(0, 24)
+        : existing?.scriptVersion,
+    syncIntervalSec:
+      typeof payload.syncIntervalSec === 'number' && Number.isFinite(payload.syncIntervalSec)
+        ? Math.min(120, Math.max(5, Math.round(payload.syncIntervalSec)))
+        : existing?.syncIntervalSec,
     source: 'lua',
   };
 }
@@ -230,7 +243,14 @@ async function startServer() {
   });
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, serverless: false, provider: 'express', timestamp: Date.now() });
+    res.json({
+      ok: true,
+      serverless: false,
+      provider: 'express',
+      latestScriptVersion: SCRIPT_VERSION,
+      scriptUpdatedAt: SCRIPT_UPDATED_AT,
+      timestamp: Date.now(),
+    });
   });
 
   // Resolve real Roblox character avatar + bodyColors + rig + assets (supports userId OR username)
@@ -313,7 +333,12 @@ async function startServer() {
     }
     const room = store.rooms[syncKey] || {};
     const accounts = Object.values(room).sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
-    res.json({ syncKey, accounts });
+    res.json({
+      syncKey,
+      accounts,
+      latestScriptVersion: SCRIPT_VERSION,
+      scriptUpdatedAt: SCRIPT_UPDATED_AT,
+    });
   });
 
   // Live SSE endpoint for real-time updates when Roblox Lua posts to /api/sync
@@ -398,6 +423,9 @@ async function startServer() {
       accountId: updated.accountId,
       lastSyncedAt: updated.lastSyncedAt,
       newRewardsCount: addedRewards.length,
+      latestScriptVersion: SCRIPT_VERSION,
+      scriptUpdatedAt: SCRIPT_UPDATED_AT,
+      updateAvailable: updated.scriptVersion !== SCRIPT_VERSION,
     });
   });
 

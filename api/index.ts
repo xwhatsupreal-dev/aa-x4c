@@ -67,6 +67,8 @@ interface AccountSnapshot {
   uniqueCount: number;
   normalKindCount: number;
   lastSyncedAt: number;
+  scriptVersion?: string;
+  syncIntervalSec?: number;
   source: 'lua';
 }
 
@@ -133,9 +135,14 @@ interface SyncPayload {
   }>;
   uniqueCount?: number;
   normalKindCount?: number;
+  scriptVersion?: string;
+  syncIntervalSec?: number;
 }
 
 type Req = IncomingMessage & { body?: unknown };
+
+const SCRIPT_VERSION = '2.4.0';
+const SCRIPT_UPDATED_AT = '21 พ.ย. 2026 · 12:30 น.';
 
 const RARITY_ORDER: Rarity[] = [
   'Secret',
@@ -344,6 +351,14 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
     uniqueCount,
     normalKindCount,
     lastSyncedAt: now,
+    scriptVersion:
+      typeof payload.scriptVersion === 'string' && payload.scriptVersion.trim()
+        ? payload.scriptVersion.trim().slice(0, 24)
+        : existing?.scriptVersion,
+    syncIntervalSec:
+      typeof payload.syncIntervalSec === 'number' && Number.isFinite(payload.syncIntervalSec)
+        ? Math.min(120, Math.max(5, Math.round(payload.syncIntervalSec)))
+        : existing?.syncIntervalSec,
     source: 'lua',
   };
 }
@@ -523,7 +538,7 @@ mstroke.Color = Color3.fromRGB(58, 58, 78); mstroke.Thickness = 1
 local titleBar = Instance.new("TextButton")
 titleBar.Size = UDim2.new(1, 0, 0, 34)
 titleBar.BackgroundColor3 = Color3.fromRGB(31, 31, 42)
-titleBar.Text = "  2K | รางวัล • กระเป๋า • ทีม • AA Vault"
+titleBar.Text = "  2K | AA Vault v" .. SCRIPT_VERSION .. " (ทุก " .. AUTO_SYNC_SEC .. " วิ)"
 titleBar.TextXAlignment = Enum.TextXAlignment.Left
 titleBar.TextColor3 = Color3.fromRGB(236, 236, 248)
 titleBar.Font = Enum.Font.GothamBold
@@ -887,6 +902,8 @@ end
 -- ============================================================
 if getgenv().TwoK then pcall(function() getgenv().TwoK.Stop() end) end
 
+local SCRIPT_VERSION = "${SCRIPT_VERSION}"
+local SCRIPT_UPDATED_AT = "${SCRIPT_UPDATED_AT}"
 local WEB_URL = "${endpoint}"
 local SYNC_KEY = "${syncKey}"
 local AUTO_SYNC_SEC = ${intervalSec}
@@ -900,9 +917,15 @@ local Hub = {
 	Equipped = {},
 	IconLookups = 0,
 	LastSync = 0,
+	SyncStartedAt = 0,
+	SyncInFlight = false,
+	SyncCount = 0,
+	FailStreak = 0,
+	UpdateNotified = false,
+	LatestVersion = SCRIPT_VERSION,
 	SyncOk = false,
 	HttpBlocked = false,
-	SyncStatus = "กำลังเชื่อมต่อ...",
+	SyncStatus = "v" .. SCRIPT_VERSION .. " • กำลังเชื่อมต่อ...",
 }
 Hub.Flags = {Notify = true, Icons = true, MaxIcons = 45, WebSync = true}
 getgenv().TwoK = Hub
@@ -1185,6 +1208,8 @@ local function buildPayloadJson()
 		rewards = recentRewards,
 		uniqueCount = uTotal,
 		normalKindCount = nKinds,
+		scriptVersion = SCRIPT_VERSION,
+		syncIntervalSec = AUTO_SYNC_SEC,
 	}
 
 	return HttpService:JSONEncode(payload), #team, #invList
@@ -1222,7 +1247,7 @@ function Hub.CopyForWeb()
 	pcall(Hub.Render)
 end
 
-function Hub.SyncToWeb(force)
+function Hub.SyncToWeb(force, reason)
 	if not Hub.Running or not Hub.Flags.WebSync then return end
 	if Hub.HttpBlocked and not force then return end
 	if not httpRequest then
@@ -1230,7 +1255,10 @@ function Hub.SyncToWeb(force)
 		pcall(Hub.Render)
 		return
 	end
+	if Hub.SyncInFlight and (os.clock() - Hub.SyncStartedAt) < 20 then return end
 	if not force and (os.clock() - Hub.LastSync) < AUTO_SYNC_SEC then return end
+	Hub.SyncInFlight = true
+	Hub.SyncStartedAt = os.clock()
 	Hub.LastSync = os.clock()
 
 	task.spawn(function()
@@ -1250,7 +1278,25 @@ function Hub.SyncToWeb(force)
 			if code == 200 and body:find('"ok"') then
 				Hub.SyncOk = true
 				Hub.HttpBlocked = false
-				Hub.SyncStatus = "ซิงค์สดสำเร็จ (" .. clock() .. ")"
+				Hub.FailStreak = 0
+				Hub.SyncCount = Hub.SyncCount + 1
+				local latestVer = SCRIPT_VERSION
+				local decOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
+				if decOk and type(decoded) == "table" and type(decoded.latestScriptVersion) == "string" and decoded.latestScriptVersion ~= "" then
+					latestVer = decoded.latestScriptVersion
+				end
+				Hub.LatestVersion = latestVer
+				if latestVer ~= SCRIPT_VERSION then
+					Hub.SyncStatus = "ออนไลน์ (v" .. SCRIPT_VERSION .. " เก่ากว่า v" .. latestVer .. ") • " .. clock()
+					if not Hub.UpdateNotified then
+						Hub.UpdateNotified = true
+						pcall(function()
+							Hub.Toast("info", "มีอัปเดตสคริปต์ใหม่ v" .. latestVer .. " — รันคำสั่ง 1 บรรทัดใหม่ได้เลย", "Secret", 1)
+						end)
+					end
+				else
+					Hub.SyncStatus = "ออนไลน์ • ซิงค์ทุก " .. AUTO_SYNC_SEC .. " วิ (#" .. Hub.SyncCount .. " • " .. clock() .. ")"
+				end
 			elseif code == 302 or code == 401 or code == 403 or body:find("cookie_check") or body:find("accounts.google.com") then
 				Hub.SyncOk = false
 				Hub.HttpBlocked = true
@@ -1260,14 +1306,17 @@ function Hub.SyncToWeb(force)
 				end)
 			else
 				Hub.SyncOk = false
-				Hub.SyncStatus = "HTTP Error " .. tostring(code) .. " — กดปุ่ม 'คัดลอกข้อมูลเข้าเว็บ'"
+				Hub.FailStreak = Hub.FailStreak + 1
+				Hub.SyncStatus = "HTTP " .. tostring(code) .. " — จะลองซิงค์ใหม่ใน " .. AUTO_SYNC_SEC .. " วิ"
 			end
 		end)
 		if not ok then
 			Hub.SyncOk = false
-			Hub.SyncStatus = "Sync Error — กดปุ่ม 'คัดลอกข้อมูลเข้าเว็บ'"
-			warn("[2K WebSync] Sync error:", err)
+			Hub.FailStreak = Hub.FailStreak + 1
+			Hub.SyncStatus = "เชื่อมต่อไม่ได้ — ลองใหม่ใน " .. AUTO_SYNC_SEC .. " วิ"
+			warn("[2K WebSync] Sync error (" .. tostring(reason or "auto") .. "):", err)
 		end
+		Hub.SyncInFlight = false
 		pcall(Hub.Render)
 	end)
 end
@@ -1474,7 +1523,7 @@ function Hub.Toast(kind, name, rarity, qty)
 end
 ${guiSection}
 ------------------------------------------------------------------
--- 7) LOOP
+-- 7) LOOP (Inventory Check + Periodic Online Heartbeat)
 ------------------------------------------------------------------
 function Hub.Refresh(forceRender)
 	if not Hub.Running then return end
@@ -1482,18 +1531,29 @@ function Hub.Refresh(forceRender)
 	if forceRender or true then pcall(Hub.Render) end
 end
 
+-- ลูป 1: เช็คของเข้ากระเป๋าและอัปเดตหน้าต่างในเกมทุก 2 วินาที
 task.spawn(function()
 	pcall(diffInventory, true)
-	Hub.SyncToWeb(true)
 	while Hub.Running do
 		pcall(Hub.Refresh)
-		Hub.SyncToWeb(false)
 		task.wait(2)
 	end
 end)
 
+-- ลูป 2: ส่ง Heartbeat ซิงค์ขึ้นเว็บตามรอบเวลา AUTO_SYNC_SEC ตลอดขณะที่เปิดเกม
+task.spawn(function()
+	Hub.SyncToWeb(true, "startup")
+	while Hub.Running do
+		task.wait(AUTO_SYNC_SEC)
+		if not Hub.Running then break end
+		if not Hub.HttpBlocked then
+			pcall(Hub.SyncToWeb, true, "heartbeat")
+		end
+	end
+end)
+
 pcall(Hub.Render)
-Hub.Toast("info", "2K AA Vault เริ่มทำงานแล้ว — ซิงค์ข้อมูลอัตโนมัติ", "Legendary", 1)
+Hub.Toast("info", "2K AA Vault v" .. SCRIPT_VERSION .. " เริ่มทำงาน — ซิงค์อัตโนมัติทุก " .. AUTO_SYNC_SEC .. " วิ", "Legendary", 1)
 `;
 }
 
@@ -1750,6 +1810,8 @@ export default async function handler(req: Req, res: ServerResponse) {
         provider: provider.name,
         persistent: provider.persistent,
         kvBound: provider.persistent,
+        latestScriptVersion: SCRIPT_VERSION,
+        scriptUpdatedAt: SCRIPT_UPDATED_AT,
         timestamp: Date.now(),
       });
       return;
@@ -1759,7 +1821,13 @@ export default async function handler(req: Req, res: ServerResponse) {
       const syncKey = sanitizeKey(parsedUrl.searchParams.get('key'));
       const room = (await storeGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
       const accounts = Object.values(room).sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
-      sendJson(res, { syncKey, accounts, provider: provider.name });
+      sendJson(res, {
+        syncKey,
+        accounts,
+        provider: provider.name,
+        latestScriptVersion: SCRIPT_VERSION,
+        scriptUpdatedAt: SCRIPT_UPDATED_AT,
+      });
       return;
     }
 
@@ -1795,6 +1863,9 @@ export default async function handler(req: Req, res: ServerResponse) {
         accountId: updated.accountId,
         lastSyncedAt: updated.lastSyncedAt,
         newRewardsCount: Math.max(0, updated.rewards.length - prevCount),
+        latestScriptVersion: SCRIPT_VERSION,
+        scriptUpdatedAt: SCRIPT_UPDATED_AT,
+        updateAvailable: updated.scriptVersion !== SCRIPT_VERSION,
       });
       return;
     }

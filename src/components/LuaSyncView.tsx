@@ -1,17 +1,29 @@
 import { useMemo, useRef, useState } from 'react';
 import {
+  Activity,
+  AlertCircle,
   Check,
   ChevronDown,
   ChevronUp,
   ClipboardPaste,
+  Clock,
   Copy,
   Download,
   FileUp,
   RefreshCw,
   Settings2,
+  Sparkles,
   Unplug,
 } from 'lucide-react';
-import { formatRelativeTime } from '../data/aaCatalog.ts';
+import {
+  formatRelativeTime,
+  getOnlineTimeoutMs,
+  isAccountOnline,
+  isScriptOutdated,
+  SCRIPT_CHANGELOG,
+  SCRIPT_UPDATED_AT,
+  SCRIPT_VERSION,
+} from '../data/aaCatalog.ts';
 import type { AccountSnapshot } from '../types.ts';
 import {
   CLOUDFLARE_WORKER_CODE,
@@ -24,6 +36,7 @@ interface LuaSyncViewProps {
   cloudflareUrl: string;
   backendProvider: string;
   accounts: AccountSnapshot[];
+  nowTs: number;
   liveConnected: boolean;
   onChangeSyncKey: (newKey: string) => void;
   onConnectCloudflare: (
@@ -41,6 +54,7 @@ export function LuaSyncView({
   cloudflareUrl,
   backendProvider,
   accounts,
+  nowTs,
   liveConnected,
   onChangeSyncKey,
   onConnectCloudflare,
@@ -57,6 +71,7 @@ export function LuaSyncView({
   const [copiedRawUrl, setCopiedRawUrl] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
   const [showFullCode, setShowFullCode] = useState(false);
+  const [showChangelog, setShowChangelog] = useState(false);
 
   // Optional advanced panel (collapsed by default so users don't need to enter any Cloudflare link!)
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -265,17 +280,97 @@ export function LuaSyncView({
     }
   };
 
+  const offlineTimeoutSec = Math.round(getOnlineTimeoutMs(intervalSec) / 1000);
+  const outdatedAccountsCount = accounts.filter((a) => isScriptOutdated(a.scriptVersion)).length;
+
   return (
     <div className="space-y-5">
       {/* Section Header */}
-      <div className="flex items-center gap-2.5">
-        <span className="w-2.5 h-2.5 rounded-full bg-[#10F5A0] shadow-[0_0_10px_#10F5A0]" />
-        <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
-          สคริปต์เชื่อมต่อเกม <span className="text-[#10F5A0]">(1 บรรทัด)</span>
-        </h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-[#10F5A0] shadow-[0_0_10px_#10F5A0]" />
+          <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
+            สคริปต์เชื่อมต่อเกม <span className="text-[#10F5A0]">(1 บรรทัด)</span>
+          </h2>
+        </div>
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#10F5A0]/12 border border-[#10F5A0]/35 text-xs font-mono font-bold text-[#10F5A0]">
+          <Sparkles size={12} />
+          <span>v{SCRIPT_VERSION} · อัปเดต {SCRIPT_UPDATED_AT}</span>
+        </span>
       </div>
 
-      {/* Auto-Sync Status Bar */}
+      {/* Script Version & Update History Card */}
+      <section className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] overflow-hidden">
+        <div className="p-5 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+          <div className="space-y-1.5 min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-bold text-white">
+                สคริปต์เวอร์ชันล่าสุด: <span className="font-mono text-[#10F5A0]">v{SCRIPT_VERSION}</span>
+              </span>
+              <span className="inline-flex items-center gap-1 text-xs text-zinc-400">
+                <Clock size={12} className="text-zinc-500" />
+                <span>อัปเดตเมื่อ {SCRIPT_UPDATED_AT}</span>
+              </span>
+            </div>
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              <strong className="text-zinc-200">คำสั่งรัน 1 บรรทัด (loadstring)</strong>{' '}
+              จะดึงสคริปต์เวอร์ชันล่าสุดจากเว็บให้อัตโนมัติ แค่กดรันซ้ำในเกมอีกครั้งเมื่อเห็นเวลาอัปเดตใหม่
+              — ส่วนถ้าใช้ไฟล์ <code className="font-mono text-zinc-300">.lua</code> หรือก๊อปโค้ดเต็ม ต้องคัดลอกใหม่ทุกครั้งที่มีอัปเดต
+            </p>
+            {outdatedAccountsCount > 0 && (
+              <p className="inline-flex items-center gap-1.5 pt-1 text-xs font-medium text-amber-300">
+                <AlertCircle size={13} className="shrink-0" />
+                <span>
+                  มี {outdatedAccountsCount} บัญชีที่ยังใช้สคริปต์รุ่นเก่า — แนะนำให้รันคำสั่ง 1 บรรทัดด้านล่างซ้ำในเกม
+                </span>
+              </p>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowChangelog((v) => !v)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#12161B] border border-white/[0.10] text-xs font-medium text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <span>{showChangelog ? 'ซ่อนประวัติอัปเดต' : 'ดูประวัติอัปเดตสคริปต์'}</span>
+            {showChangelog ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        </div>
+
+        {showChangelog && (
+          <div className="border-t border-white/[0.08] bg-[#080B0E] px-5 py-4 space-y-4">
+            {SCRIPT_CHANGELOG.map((rel, idx) => (
+              <div
+                key={rel.version}
+                className={idx > 0 ? 'pt-3.5 border-t border-white/[0.06]' : ''}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`font-mono text-xs font-bold ${
+                      idx === 0 ? 'text-[#10F5A0]' : 'text-zinc-200'
+                    }`}
+                  >
+                    v{rel.version}
+                  </span>
+                  {idx === 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-[#10F5A0]/15 text-[10px] font-semibold text-[#10F5A0]">
+                      ล่าสุด
+                    </span>
+                  )}
+                  <span className="text-xs text-zinc-500">{rel.updatedAt}</span>
+                </div>
+                <ul className="mt-1.5 space-y-1 text-xs text-zinc-300 list-disc pl-4">
+                  {rel.highlights.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Auto-Sync Status Bar + Per-Account Version & Heartbeat Check */}
       <section className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -286,7 +381,7 @@ export function LuaSyncView({
             </p>
             <p className="mt-1 text-sm font-medium text-white">
               {accounts.length > 0
-                ? `บันทึกข้อมูลจริงแล้ว ${accounts.length} บัญชี (ค้างไว้ดูได้ตลอดแม้ออฟไลน์)`
+                ? `บันทึกข้อมูลจริงแล้ว ${accounts.length} บัญชี (เช็คสถานะออนไลน์ตามรอบซิงค์ของแต่ละไอดี)`
                 : 'กำลังรอข้อมูลจากสคริปต์ในเกม — รันคำสั่งด้านล่างแล้วข้อมูลจะเด้งเข้าเว็บอัตโนมัติ'}
             </p>
           </div>
@@ -297,30 +392,58 @@ export function LuaSyncView({
 
         {accounts.length > 0 && (
           <ul className="mt-4 pt-4 border-t border-white/[0.07] divide-y divide-white/[0.06]">
-            {accounts.map((acc) => (
-              <li
-                key={acc.accountId}
-                className="py-2.5 flex items-center justify-between gap-4"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-white truncate">
-                    {acc.displayName}{' '}
-                    <span className="text-zinc-500">(@{acc.username})</span>
-                  </p>
-                  <p className="text-xs text-zinc-500">
-                    ซิงค์ล่าสุด {formatRelativeTime(acc.lastSyncedAt)} · ทีม {acc.equipped.length}/6 · ไอเทม{' '}
-                    {acc.inventory.length} ชนิด
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => onOpenAccount(acc.accountId)}
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded-full bg-[#14191F] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            {accounts.map((acc) => {
+              const online = isAccountOnline(acc.lastSyncedAt, nowTs, acc.syncIntervalSec);
+              const outdated = isScriptOutdated(acc.scriptVersion);
+              return (
+                <li
+                  key={acc.accountId}
+                  className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                 >
-                  เปิดดูของ
-                </button>
-              </li>
-            ))}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`w-2 h-2 rounded-full shrink-0 ${
+                          online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-600'
+                        }`}
+                      />
+                      <p className="text-sm font-medium text-white truncate">
+                        {acc.displayName}{' '}
+                        <span className="text-zinc-500">(@{acc.username})</span>
+                      </p>
+                      <span
+                        className={`text-[11px] font-mono ${
+                          online ? 'text-[#10F5A0]' : 'text-zinc-500'
+                        }`}
+                      >
+                        {online ? 'ออนไลน์' : 'ออฟไลน์'}
+                      </span>
+                      {outdated ? (
+                        <span className="px-2 py-0.5 rounded-full bg-amber-400/12 border border-amber-400/35 text-[10px] font-semibold text-amber-300">
+                          สคริปต์เก่า ({acc.scriptVersion ? `v${acc.scriptVersion}` : 'รุ่นก่อน'}) · ควรรันใหม่
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full bg-[#10F5A0]/12 border border-[#10F5A0]/30 text-[10px] font-mono font-semibold text-[#10F5A0]">
+                          v{acc.scriptVersion} ล่าสุด
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-xs text-zinc-500">
+                      ซิงค์ล่าสุด {formatRelativeTime(acc.lastSyncedAt, nowTs)}
+                      {acc.syncIntervalSec ? ` · เช็คทุก ${acc.syncIntervalSec} วิ` : ''}
+                      {' · '}ทีม {acc.equipped.length}/6 · ไอเทม {acc.inventory.length} ชนิด
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onOpenAccount(acc.accountId)}
+                    className="self-start sm:self-center px-3.5 py-1.5 text-xs font-semibold rounded-full bg-[#14191F] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    เปิดดูของ
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -330,7 +453,7 @@ export function LuaSyncView({
         <div className="p-5 border-b border-white/[0.08] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="min-w-0">
             <h3 className="font-display text-base font-bold text-white">
-              คำสั่งรันแบบสั้น (โฮสต์ตรงบนเว็บนี้)
+              คำสั่งรันแบบสั้น (โฮสต์ตรงบนเว็บนี้ · v{SCRIPT_VERSION})
             </h3>
             <p className="text-xs text-zinc-400 mt-0.5">
               คัดลอก 1 บรรทัดไปรันในตัวรัน Roblox ได้เลย ไม่ต้องฝาก Pastebin เอง
@@ -351,12 +474,14 @@ export function LuaSyncView({
             <select
               value={intervalSec}
               onChange={(e) => setIntervalSec(Number(e.target.value))}
-              aria-label="ความถี่ในการซิงค์"
+              aria-label="ความถี่ในการเช็คออนไลน์และซิงค์"
               className="px-3 py-1.5 text-xs rounded-xl bg-[#050709] border border-white/[0.10] text-zinc-200 focus:outline-none focus:border-[#10F5A0]/60 cursor-pointer"
             >
-              <option value={5}>ซิงค์ทุก 5 วินาที</option>
-              <option value={10}>ซิงค์ทุก 10 วินาที</option>
-              <option value={30}>ซิงค์ทุก 30 วินาที</option>
+              <option value={5}>เช็ค/ซิงค์ทุก 5 วินาที</option>
+              <option value={10}>เช็ค/ซิงค์ทุก 10 วินาที</option>
+              <option value={15}>เช็ค/ซิงค์ทุก 15 วินาที</option>
+              <option value={30}>เช็ค/ซิงค์ทุก 30 วินาที</option>
+              <option value={60}>เช็ค/ซิงค์ทุก 60 วินาที</option>
             </select>
           </div>
         </div>
@@ -367,6 +492,16 @@ export function LuaSyncView({
               {shortLoadstring}
             </code>
           </div>
+
+          <p className="flex items-start gap-2 text-xs text-zinc-400">
+            <Activity size={14} className="text-[#10F5A0] shrink-0 mt-0.5" />
+            <span>
+              ขณะรันสคริปต์ ระบบจะส่งสัญญาณ Heartbeat และอัปเดตของทุก ๆ{' '}
+              <strong className="text-zinc-200">{intervalSec} วินาที</strong> — หากปิดเกมหรือสคริปต์หยุดเกิน{' '}
+              <strong className="text-zinc-200">~{offlineTimeoutSec} วินาที</strong> เว็บจะสลับเป็น{' '}
+              <strong className="text-zinc-200">ออฟไลน์</strong> อัตโนมัติ (แต่ยังเก็บของค้างไว้ให้ดูต่อได้)
+            </span>
+          </p>
 
           <div className="flex flex-wrap items-center gap-2.5">
             <button

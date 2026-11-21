@@ -13,7 +13,9 @@ import {
   formatCompact,
   formatRelativeTime,
   isAccountOnline,
+  isScriptOutdated,
   RARITY_META,
+  SCRIPT_VERSION,
 } from './data/aaCatalog.ts';
 import type { AccountSnapshot, RewardEntry, SyncPayload } from './types.ts';
 import { AccountDashboard, type DashboardTab } from './components/AccountDashboard.tsx';
@@ -90,7 +92,7 @@ export default function App() {
   const [nowTs, setNowTs] = useState<number>(() => Date.now());
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNowTs(Date.now()), 15_000);
+    const timer = window.setInterval(() => setNowTs(Date.now()), 5_000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -505,7 +507,10 @@ export default function App() {
   ];
 
   const visibleNavItems = navItems.filter((item) => !(shareId && item.hideInShare));
-  const onlineCount = accounts.filter((a) => isAccountOnline(a.lastSyncedAt, nowTs)).length;
+  const onlineCount = accounts.filter((a) =>
+    isAccountOnline(a.lastSyncedAt, nowTs, a.syncIntervalSec)
+  ).length;
+  const outdatedCount = accounts.filter((a) => isScriptOutdated(a.scriptVersion)).length;
 
   const storageShortLabel = cloudflareUrl
     ? 'Cloudflare KV'
@@ -700,11 +705,12 @@ export default function App() {
             <div className="flex items-stretch gap-2 overflow-x-auto pb-1.5">
               {accounts.map((acc) => {
                 const selected = activeAccount?.accountId === acc.accountId && activeTab !== 'sync';
-                const online = isAccountOnline(acc.lastSyncedAt, nowTs);
+                const online = isAccountOnline(acc.lastSyncedAt, nowTs, acc.syncIntervalSec);
+                const outdated = isScriptOutdated(acc.scriptVersion);
                 return (
                   <div
                     key={acc.accountId}
-                    className={`group relative shrink-0 min-w-[195px] max-w-[235px] rounded-2xl border transition-all ${
+                    className={`group relative shrink-0 min-w-[205px] max-w-[248px] rounded-2xl border transition-all ${
                       selected
                         ? 'bg-[#101816] border-[#10F5A0]/55 shadow-[0_0_18px_rgba(16,245,160,0.10)]'
                         : 'bg-[#0B0E11] border-white/[0.08] hover:border-white/[0.16]'
@@ -737,13 +743,23 @@ export default function App() {
                         <p className="mt-0.5 text-[11px] font-mono tabular-nums text-zinc-400 truncate">
                           {formatCompact(acc.gems)} Gems · {formatCompact(acc.gold)} Gold
                         </p>
-                        <p
-                          className={`mt-0.5 text-[10px] truncate ${
-                            online ? 'text-[#10F5A0]' : 'text-zinc-500'
-                          }`}
-                        >
-                          {online ? 'ออนไลน์' : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
-                        </p>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] truncate">
+                          <span className={online ? 'text-[#10F5A0]' : 'text-zinc-500'}>
+                            {online
+                              ? acc.syncIntervalSec
+                                ? `ออนไลน์ · ทุก ${acc.syncIntervalSec} วิ`
+                                : 'ออนไลน์'
+                              : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
+                          </span>
+                          {outdated && (
+                            <span
+                              title={`สคริปต์เก่า (${acc.scriptVersion ? `v${acc.scriptVersion}` : 'ไม่ระบุ'}) · ล่าสุด v${SCRIPT_VERSION}`}
+                              className="text-amber-300 font-medium shrink-0"
+                            >
+                              · อัปเดตสคริปต์
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </button>
 
@@ -800,6 +816,7 @@ export default function App() {
             cloudflareUrl={cloudflareUrl}
             backendProvider={backendProvider}
             accounts={accounts}
+            nowTs={nowTs}
             liveConnected={liveConnected}
             onChangeSyncKey={handleChangeSyncKey}
             onConnectCloudflare={handleConnectCloudflare}
@@ -874,21 +891,30 @@ export default function App() {
           {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeTab === item.id;
+            const showUpdateDot = item.id === 'sync' && outdatedCount > 0;
             return (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => setActiveTab(item.id)}
-                className={`flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-xl transition-all cursor-pointer ${
+                className={`relative flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-xl transition-all cursor-pointer ${
                   active
                     ? 'bg-[#1A1F26] border border-white/[0.10] text-white shadow-sm'
                     : 'border border-transparent text-zinc-400 hover:text-zinc-200'
                 }`}
               >
-                <Icon
-                  size={18}
-                  className={active ? 'text-[#10F5A0]' : 'text-zinc-400'}
-                />
+                <span className="relative">
+                  <Icon
+                    size={18}
+                    className={active ? 'text-[#10F5A0]' : 'text-zinc-400'}
+                  />
+                  {showUpdateDot && (
+                    <span
+                      title={`มี ${outdatedCount} บัญชีที่ใช้สคริปต์เวอร์ชันเก่า`}
+                      className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]"
+                    />
+                  )}
+                </span>
                 <span className="text-[11px] font-semibold leading-none whitespace-nowrap">
                   {item.label}
                 </span>

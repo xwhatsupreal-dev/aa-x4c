@@ -125,6 +125,58 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export function isAccountOnline(lastSyncedAt: number, now = Date.now()): boolean {
-  return now - lastSyncedAt <= ONLINE_THRESHOLD_MS;
+export const SCRIPT_VERSION = '2.4.0';
+export const SCRIPT_UPDATED_AT = '21 พ.ย. 2026 · 12:30 น.';
+
+export interface ScriptReleaseNote {
+  version: string;
+  updatedAt: string;
+  highlights: string[];
+}
+
+export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.4.0',
+    updatedAt: '21 พ.ย. 2026 · 12:30 น.',
+    highlights: [
+      'เพิ่มลูป Heartbeat ซิงค์และเช็คออนไลน์อัตโนมัติตามรอบเวลาที่ตั้งไว้ (5 / 10 / 15 / 30 / 60 วินาที)',
+      'ส่งเวอร์ชันสคริปต์และรอบเวลาซิงค์ขึ้นเว็บ พร้อมแจ้งเตือนทั้งบนเว็บและในเกมเมื่อมีเวอร์ชันใหม่',
+      'ปรับระบบลองส่งใหม่อัตโนมัติเมื่อเน็ตหลุดชั่วคราว ไม่หยุดซิงค์เงียบๆ',
+    ],
+  },
+  {
+    version: '2.3.0',
+    updatedAt: '21 พ.ย. 2026 · 11:10 น.',
+    highlights: [
+      'ส่ง UserId และข้อมูลตัวละคร Roblox จริงของบัญชีที่รันสคริปต์ขึ้นหน้าโปรไฟล์',
+      'แก้ไม่ให้ไอเทมที่มีอยู่แล้วในกระเป๋าเด้งเข้าไปในประวัติของดรอปตอนเพิ่งรันสคริปต์',
+    ],
+  },
+  {
+    version: '2.2.0',
+    updatedAt: '21 พ.ย. 2026 · 09:40 น.',
+    highlights: [
+      'รองรับคำสั่งรันแบบ 1 บรรทัด (loadstring) โฮสต์บนเว็บโดยตรง ไม่ต้องฝาก Pastebin',
+    ],
+  },
+];
+
+export function isScriptOutdated(version?: string): boolean {
+  return !version || version.trim() !== SCRIPT_VERSION;
+}
+
+export function getOnlineTimeoutMs(syncIntervalSec?: number): number {
+  if (typeof syncIntervalSec === 'number' && Number.isFinite(syncIntervalSec) && syncIntervalSec > 0) {
+    const clamped = Math.min(120, Math.max(5, Math.round(syncIntervalSec)));
+    return Math.max(25_000, Math.round(clamped * 2.5 * 1000) + 10_000);
+  }
+  return ONLINE_THRESHOLD_MS;
+}
+
+export function isAccountOnline(
+  lastSyncedAt: number,
+  now = Date.now(),
+  syncIntervalSec?: number
+): boolean {
+  return now - lastSyncedAt <= getOnlineTimeoutMs(syncIntervalSec);
 }

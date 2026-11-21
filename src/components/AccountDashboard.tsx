@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  AlertCircle,
   Check,
   Clock,
   Code2,
@@ -24,9 +25,12 @@ import {
   formatNumber,
   formatRelativeTime,
   isAccountOnline,
+  isScriptOutdated,
   RARITY_META,
   RARITY_ORDER,
   RARITY_RANK,
+  SCRIPT_UPDATED_AT,
+  SCRIPT_VERSION,
 } from '../data/aaCatalog.ts';
 import type {
   AccountSnapshot,
@@ -121,7 +125,8 @@ export function AccountDashboard({
   const [invView, setInvView] = useState<'grid' | 'table'>('grid');
   const [copiedSummary, setCopiedSummary] = useState(false);
 
-  const online = isAccountOnline(account.lastSyncedAt, nowTs);
+  const online = isAccountOnline(account.lastSyncedAt, nowTs, account.syncIntervalSec);
+  const scriptOutdated = isScriptOutdated(account.scriptVersion);
 
   // Fixed 6 team slots
   const slots: Array<{ slot: number; unit: TeamUnit | null }> = useMemo(
@@ -353,7 +358,13 @@ export function AccountDashboard({
                   online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-500'
                 }`}
               />
-              <span>{online ? 'ออนไลน์' : 'ออฟไลน์'}</span>
+              <span>
+                {online
+                  ? account.syncIntervalSec
+                    ? `ออนไลน์ · ทุก ${account.syncIntervalSec} วิ`
+                    : 'ออนไลน์'
+                  : 'ออฟไลน์'}
+              </span>
             </span>
           </div>
 
@@ -481,12 +492,37 @@ export function AccountDashboard({
           </div>
         </div>
 
+        {/* Script Update Notice when account synced from an older Lua script */}
+        {!isReadOnly && scriptOutdated && onOpenSync && (
+          <div className="border-t border-amber-400/20 bg-amber-400/[0.06] px-4 py-2.5 flex items-center justify-between gap-2.5">
+            <div className="flex items-start gap-2 min-w-0">
+              <AlertCircle size={14} className="text-amber-300 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-amber-200 truncate">
+                  สคริปต์เก่า ({account.scriptVersion ? `v${account.scriptVersion}` : 'รุ่นก่อน'}) · ล่าสุด v{SCRIPT_VERSION}
+                </p>
+                <p className="text-[10px] text-amber-300/75 truncate">
+                  อัปเดตเมื่อ {SCRIPT_UPDATED_AT}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenSync}
+              className="px-2.5 py-1 rounded-lg bg-amber-400/20 border border-amber-300/40 text-[11px] font-semibold text-amber-200 hover:bg-amber-400/30 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              อัปเดต
+            </button>
+          </div>
+        )}
+
         {/* Bottom Meta Footer Bar */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-white/[0.08] bg-white/[0.02] px-5 py-2.5 text-xs text-zinc-400">
           <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
             <Monitor size={13} className="shrink-0 text-zinc-500" />
-            <span className="truncate">
-              {storageLabel} · {syncKey}
+            <span className="truncate font-mono text-[11px]">
+              {account.scriptVersion ? `v${account.scriptVersion}` : storageLabel}
+              {account.syncIntervalSec ? ` · ${account.syncIntervalSec}s` : ` · ${syncKey}`}
             </span>
           </span>
           <span className="inline-flex items-center gap-1.5 shrink-0 tabular-nums">
@@ -844,25 +880,49 @@ export function AccountDashboard({
               <button
                 type="button"
                 onClick={onOpenSync}
-                className="relative flex min-w-0 cursor-pointer flex-col items-center gap-0.5 overflow-hidden rounded-2xl px-1.5 py-2 text-center transition-colors sm:flex-row sm:gap-3 sm:px-3 sm:py-2.5 sm:text-left bg-[#101418] border border-white/[0.07] hover:border-[#10F5A0]/45"
+                className={`relative flex min-w-0 cursor-pointer flex-col items-center gap-0.5 overflow-hidden rounded-2xl px-1.5 py-2 text-center transition-colors sm:flex-row sm:gap-3 sm:px-3 sm:py-2.5 sm:text-left bg-[#101418] border ${
+                  scriptOutdated
+                    ? 'border-amber-400/45 hover:border-amber-300/70'
+                    : 'border-white/[0.07] hover:border-[#10F5A0]/45'
+                }`}
               >
-                <span className="flex items-center gap-1 sm:hidden text-[#10F5A0]">
+                <span
+                  className={`flex items-center gap-1 sm:hidden ${
+                    scriptOutdated ? 'text-amber-300' : 'text-[#10F5A0]'
+                  }`}
+                >
                   <Code2 size={14} />
-                  <span className="text-sm font-bold leading-tight text-white">Lua</span>
+                  <span className="text-xs font-mono font-bold leading-tight text-white">
+                    v{SCRIPT_VERSION}
+                  </span>
                 </span>
-                <span className="text-[10px] leading-tight sm:hidden truncate w-full text-zinc-400">
-                  สคริปต์
+                <span
+                  className={`text-[10px] leading-tight sm:hidden truncate w-full ${
+                    scriptOutdated ? 'text-amber-300 font-semibold' : 'text-zinc-400'
+                  }`}
+                >
+                  {scriptOutdated ? 'มีอัปเดต' : 'สคริปต์'}
                 </span>
 
-                <span className="hidden size-9 shrink-0 place-items-center rounded-xl sm:grid bg-white/[0.05] text-[#10F5A0]">
+                <span
+                  className={`hidden size-9 shrink-0 place-items-center rounded-xl sm:grid ${
+                    scriptOutdated
+                      ? 'bg-amber-400/15 text-amber-300'
+                      : 'bg-white/[0.05] text-[#10F5A0]'
+                  }`}
+                >
                   <Code2 size={17} />
                 </span>
                 <span className="hidden min-w-0 sm:block">
-                  <span className="block text-base font-bold leading-tight text-white">
-                    Lua
+                  <span className="block text-sm font-mono font-bold leading-tight text-white">
+                    v{SCRIPT_VERSION}
                   </span>
-                  <span className="block truncate text-xs text-zinc-400">
-                    สคริปต์ซิงค์
+                  <span
+                    className={`block truncate text-xs ${
+                      scriptOutdated ? 'text-amber-300 font-medium' : 'text-zinc-400'
+                    }`}
+                  >
+                    {scriptOutdated ? 'อัปเดตสคริปต์' : 'สคริปต์ซิงค์'}
                   </span>
                 </span>
               </button>
