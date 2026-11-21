@@ -340,11 +340,37 @@ async function readBodyText(req: Req): Promise<string> {
 
 // 1) Upstash Redis / Vercel KV (automatically available via 1-click Vercel Storage Marketplace)
 function getRedisConfig() {
-  const url = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '')
+  const directUrl = (
+    process.env.KV_REST_API_URL ||
+    process.env.UPSTASH_REDIS_REST_URL ||
+    ''
+  )
     .trim()
     .replace(/\/+$/, '');
-  const token = (process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
-  if (url && token) return { url, token };
+  const directToken = (
+    process.env.KV_REST_API_TOKEN ||
+    process.env.UPSTASH_REDIS_REST_TOKEN ||
+    ''
+  ).trim();
+  if (directUrl && directToken) return { url: directUrl, token: directToken };
+
+  // Also support prefixed Marketplace env vars (e.g. STORAGE_KV_REST_API_URL / *_REDIS_REST_URL)
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!value) continue;
+    if (key.endsWith('_REST_API_URL')) {
+      const tokenKey = key.replace(/_REST_API_URL$/, '_REST_API_TOKEN');
+      const token = process.env[tokenKey]?.trim();
+      const url = value.trim().replace(/\/+$/, '');
+      if (url && token) return { url, token };
+    }
+    if (key.endsWith('_REDIS_REST_URL')) {
+      const tokenKey = key.replace(/_REDIS_REST_URL$/, '_REDIS_REST_TOKEN');
+      const token = process.env[tokenKey]?.trim();
+      const url = value.trim().replace(/\/+$/, '');
+      if (url && token) return { url, token };
+    }
+  }
+
   return null;
 }
 
