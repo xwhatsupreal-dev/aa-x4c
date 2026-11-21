@@ -30,14 +30,22 @@ interface StageInfo {
   mapImageId?: string;
 }
 
+interface CurrencyIcons {
+  gold?: string;
+  gems?: string;
+  summerPearls?: string;
+}
+
 interface ExtraStats {
   playerXp?: number;
   resource?: number;
+  summerPearls?: number;
   trophies?: number;
   rebirthTokens?: number;
   behelitXp?: number;
   curseTokens?: number;
   traitTokens?: number;
+  eventResources?: Record<string, number>;
 }
 
 interface TeamUnit {
@@ -59,6 +67,7 @@ interface InventoryItem {
   qty: number;
   kind: 'normal' | 'unique' | 'unit';
   iconId?: string;
+  tier?: string;
 }
 
 interface RewardEntry {
@@ -71,6 +80,7 @@ interface RewardEntry {
   qty: number;
   src: string;
   iconId?: string;
+  tier?: string;
   runId?: string;
   stageName?: string;
   stageWorld?: string;
@@ -89,6 +99,7 @@ interface RewardTotal {
   rarity: Rarity;
   qty: number;
   iconId?: string;
+  tier?: string;
 }
 
 interface AccountSnapshot {
@@ -100,6 +111,7 @@ interface AccountSnapshot {
   gold: number;
   gems: number;
   level?: number;
+  currencyIcons?: CurrencyIcons;
   extraStats?: ExtraStats;
   currentStage?: StageInfo;
   equipped: TeamUnit[];
@@ -148,6 +160,7 @@ interface SyncPayload {
   gold?: number;
   gems?: number;
   level?: number;
+  currencyIcons?: CurrencyIcons;
   extraStats?: ExtraStats;
   currentStage?: StageInfo;
   equipped?: Array<{
@@ -168,6 +181,7 @@ interface SyncPayload {
     qty?: number;
     kind?: 'normal' | 'unique' | 'unit';
     iconId?: string;
+    tier?: string | number;
   }>;
   rewards?: Array<{
     t?: string;
@@ -179,6 +193,7 @@ interface SyncPayload {
     qty?: number;
     src?: string;
     iconId?: string;
+    tier?: string | number;
     runId?: string;
     stageName?: string;
     stageWorld?: string;
@@ -198,8 +213,8 @@ interface SyncPayload {
 
 type Req = IncomingMessage & { body?: unknown };
 
-const SCRIPT_VERSION = '2.6.0';
-const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 23:45 น. (เวลาไทย)';
+const SCRIPT_VERSION = '2.7.0';
+const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 01:20 น. (เวลาไทย)';
 
 const RARITY_ORDER: Rarity[] = [
   'Secret',
@@ -453,17 +468,81 @@ function sanitizeStage(raw: unknown, fallback?: StageInfo): StageInfo | undefine
   };
 }
 
+function optTier(raw: unknown, itemId?: string, itemName?: string): string | undefined {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1 && raw <= 99) {
+    return `Tier ${Math.floor(raw)}`;
+  }
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (s) {
+      const mNum = s.match(/^(?:tier\s*)?(\d{1,2})$/i);
+      if (mNum) return `Tier ${Number(mNum[1])}`;
+      if (/^tier\s+/i.test(s)) return s.slice(0, 24);
+      if (/^[IVXS]{1,4}[+-]?$/i.test(s)) return `Tier ${s.toUpperCase()}`;
+      return s.slice(0, 24);
+    }
+  }
+  const idStr = String(itemId || '');
+  const mId =
+    idStr.match(/(?:charm|portal)[_-]+(\d{1,2})$/i) ||
+    idStr.match(/[_-]tier[_-]*(\d{1,2})$/i) ||
+    idStr.match(/[_-]t(\d{1,2})$/i);
+  if (mId) return `Tier ${Number(mId[1])}`;
+  const nameStr = String(itemName || '');
+  const mName = nameStr.match(/\btier\s*(\d{1,2})\b/i);
+  if (mName) return `Tier ${Number(mName[1])}`;
+  return undefined;
+}
+
+function classifyInventoryGroup(rawGroup: string, id: string, name: string, kind: string): string {
+  if (kind === 'unit') return 'Units';
+  const g = (rawGroup || '').trim();
+  const lowG = g.toLowerCase();
+  const hay = `${id} ${name}`.toLowerCase();
+  if (lowG.includes('portal') || hay.includes('portal')) return 'Portals';
+  if (lowG.includes('charm') || hay.includes('charm')) return 'Charms';
+  return g || 'Other';
+}
+
+function sanitizeCurrencyIcons(raw: unknown, fallback?: CurrencyIcons): CurrencyIcons | undefined {
+  if (!raw || typeof raw !== 'object') return fallback;
+  const s = raw as Record<string, unknown>;
+  const out: CurrencyIcons = {
+    gold: cleanAssetId(s.gold) || fallback?.gold,
+    gems: cleanAssetId(s.gems) || fallback?.gems,
+    summerPearls: cleanAssetId(s.summerPearls) || fallback?.summerPearls,
+  };
+  return out.gold || out.gems || out.summerPearls ? out : fallback;
+}
+
 function sanitizeExtraStats(raw: unknown, fallback?: ExtraStats): ExtraStats | undefined {
   if (!raw || typeof raw !== 'object') return fallback;
   const s = raw as Record<string, unknown>;
+  let eventResources: Record<string, number> | undefined;
+  if (s.eventResources && typeof s.eventResources === 'object' && !Array.isArray(s.eventResources)) {
+    const out: Record<string, number> = {};
+    let count = 0;
+    for (const [k, v] of Object.entries(s.eventResources as Record<string, unknown>)) {
+      if (count >= 24) break;
+      const key = String(k).trim().slice(0, 48);
+      const val = optNum(v);
+      if (key && val !== undefined) {
+        out[key] = val;
+        count++;
+      }
+    }
+    if (count > 0) eventResources = out;
+  }
   return {
     playerXp: optNum(s.playerXp),
     resource: optNum(s.resource),
+    summerPearls: optNum(s.summerPearls),
     trophies: optNum(s.trophies),
     rebirthTokens: optNum(s.rebirthTokens),
     behelitXp: optNum(s.behelitXp),
     curseTokens: optNum(s.curseTokens),
     traitTokens: optNum(s.traitTokens),
+    eventResources: eventResources ?? fallback?.eventResources,
   };
 }
 
@@ -488,15 +567,22 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
   const inventory: InventoryItem[] = Array.isArray(payload.inventory)
     ? payload.inventory
         .filter((it) => it && it.id)
-        .map((it): InventoryItem => ({
-          id: String(it.id),
-          name: String(it.name || it.id),
-          rarity: normalizeRarity(it.rarity),
-          group: String(it.group || 'Other'),
-          qty: Math.max(0, Number(it.qty) || 0),
-          kind: it.kind === 'unique' ? 'unique' : it.kind === 'unit' ? 'unit' : 'normal',
-          iconId: cleanAssetId(it.iconId),
-        }))
+        .map((it): InventoryItem => {
+          const id = String(it.id);
+          const name = String(it.name || it.id);
+          const kind: 'normal' | 'unique' | 'unit' =
+            it.kind === 'unique' ? 'unique' : it.kind === 'unit' ? 'unit' : 'normal';
+          return {
+            id,
+            name,
+            rarity: normalizeRarity(it.rarity),
+            group: classifyInventoryGroup(String(it.group || 'Other'), id, name, kind),
+            qty: Math.max(0, Number(it.qty) || 0),
+            kind,
+            iconId: cleanAssetId(it.iconId),
+            tier: optTier(it.tier, id, name),
+          };
+        })
         .filter((it) => it.qty > 0)
     : existing?.inventory ?? [];
 
@@ -506,16 +592,19 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
         .map((r): RewardEntry => {
           const hasTs = typeof r.ts === 'number' && r.ts > 0;
           const ts = hasTs ? r.ts! : now;
+          const id = String(r.id);
+          const name = String(r.name || r.id);
           return {
             t: hasTs ? formatClock(ts) : r.t || formatClock(ts),
             ts,
             kind: r.kind === 'unit' ? 'unit' : r.kind === 'currency' ? 'currency' : 'item',
-            id: String(r.id),
-            name: String(r.name || r.id),
+            id,
+            name,
             rarity: normalizeRarity(r.rarity),
             qty: Math.max(1, Number(r.qty) || 1),
             src: String(r.src || 'sync'),
             iconId: cleanAssetId(r.iconId),
+            tier: optTier(r.tier, id, name),
             runId: optStr(r.runId, 48),
             stageName: optStr(r.stageName, 80),
             stageWorld: optStr(r.stageWorld, 64),
@@ -530,7 +619,8 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
     : [];
 
   const mergedRewards: RewardEntry[] = existing ? [...existing.rewards] : [];
-  const rewardSig = (r: RewardEntry) => `${r.runId || r.t}|${r.kind}|${r.id}|${r.qty}|${r.src}`;
+  const rewardSig = (r: RewardEntry) =>
+    `${r.runId || r.t}|${r.kind}|${r.id}|${r.tier || ''}|${r.qty}|${r.src}`;
   const seenSig = new Set(mergedRewards.map(rewardSig));
   const newlyAdded: RewardEntry[] = [];
 
@@ -548,7 +638,7 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
 
   const totals: Record<string, RewardTotal> = {};
   for (const r of finalRewards) {
-    const key = `${r.kind}|${r.id}`;
+    const key = `${r.kind}|${r.id}|${r.tier || ''}`;
     if (!totals[key]) {
       totals[key] = {
         kind: r.kind,
@@ -557,6 +647,7 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
         rarity: r.rarity,
         qty: 0,
         iconId: r.iconId,
+        tier: r.tier,
       };
     } else if (!totals[key].iconId && r.iconId) {
       totals[key].iconId = r.iconId;
@@ -589,6 +680,7 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
     gold: typeof payload.gold === 'number' ? payload.gold : existing?.gold ?? 0,
     gems: typeof payload.gems === 'number' ? payload.gems : existing?.gems ?? 0,
     level: typeof payload.level === 'number' ? payload.level : existing?.level,
+    currencyIcons: sanitizeCurrencyIcons(payload.currencyIcons, existing?.currencyIcons),
     extraStats: sanitizeExtraStats(payload.extraStats, existing?.extraStats),
     currentStage: sanitizeStage(payload.currentStage, existing?.currentStage),
     equipped,
@@ -662,13 +754,17 @@ const CURRENCY_FILE_MAP: Record<string, string[]> = {
   gems: ['File:Gems.png'],
   gem: ['File:Gems.png'],
   first_clear_gems: ['File:Gems.png'],
+  summer_pearls: ['File:Summer Pearls.png', 'File:Summer Pearl.png', 'File:Pearls.png', 'File:Pearl.png'],
+  summerpearls: ['File:Summer Pearls.png', 'File:Summer Pearl.png', 'File:Pearls.png', 'File:Pearl.png'],
+  'summer pearls': ['File:Summer Pearls.png', 'File:Summer Pearl.png', 'File:Pearls.png', 'File:Pearl.png'],
+  pearls: ['File:Summer Pearls.png', 'File:Pearls.png', 'File:Pearl.png'],
   trophies: ['File:Trophies.png'],
   trophy: ['File:Trophies.png'],
   trait_tokens: ['File:Star Remnant.png', 'File:Remnant.png'],
   trait_reroll: ['File:Star Remnant.png', 'File:Remnant.png'],
   curse_tokens: ['File:Cursed Womb.png', 'File:Curse Token.png'],
   rebirth_tokens: ['File:Rebirth Token.png'],
-  resource: ['File:Holiday Stars.png', 'File:Candies.png', 'File:Pearls.png'],
+  resource: ['File:Summer Pearls.png', 'File:Pearls.png', 'File:Holiday Stars.png', 'File:Candies.png'],
 };
 
 function stripParens(name: string): string {
@@ -864,15 +960,17 @@ async function resolveAaImageUrl(opts: {
       const preset =
         CURRENCY_FILE_MAP[lowerId] ||
         CURRENCY_FILE_MAP[lowerName] ||
-        (lowerName.includes('gem')
-          ? ['File:Gems.png']
-          : lowerName.includes('gold')
-            ? ['File:Gold.png']
-            : lowerName.includes('trophy')
-              ? ['File:Trophies.png']
-              : lowerName.includes('trait') || lowerName.includes('remnant')
-                ? ['File:Star Remnant.png']
-                : []);
+        (lowerName.includes('pearl') || lowerId.includes('pearl')
+          ? ['File:Summer Pearls.png', 'File:Summer Pearl.png', 'File:Pearls.png', 'File:Pearl.png']
+          : lowerName.includes('gem')
+            ? ['File:Gems.png']
+            : lowerName.includes('gold')
+              ? ['File:Gold.png']
+              : lowerName.includes('trophy')
+                ? ['File:Trophies.png']
+                : lowerName.includes('trait') || lowerName.includes('remnant')
+                  ? ['File:Star Remnant.png']
+                  : []);
       const candidates = uniqueStrings([
         ...preset,
         ...(name ? [`File:${name}.png`] : []),
@@ -894,7 +992,7 @@ async function resolveAaImageUrl(opts: {
         [/clover/i, ['File:Map - Clover Kingdom.png']],
         [/sand[\s_-]*village|hidden[\s_-]*sand/i, ['File:Map - Hidden Sand Village.png']],
         [/hollow[\s_-]*invasion/i, ['File:Map - Hollow Invasion.png']],
-        [/hollow/i, ['File:Map - Hollow World.png']],
+        [/hollow|hueco/i, ['File:Map - Hollow World.png', 'File:Map - Hollow Invasion.png']],
         [/hero[\s_-]*city|midnight/i, ['File:Map - Hero City.png']],
         [/ghoul/i, ['File:Map - Ghoul City.png']],
         [/snowy/i, ['File:Map - Snowy Town.png']],
@@ -902,7 +1000,7 @@ async function resolveAaImageUrl(opts: {
         [/ant[\s_-]*kingdom/i, ['File:Map - Ant Kingdom.png']],
         [/alien|spaceship/i, ['File:Map - Alien Spaceship.png']],
         [/puppet|dressrosa/i, ['File:Map - Puppet Island.png']],
-        [/virtual|dungeon/i, ['File:Map - Virtual Dungeon.png']],
+        [/virtual|dungeon|sao|aincrad/i, ['File:Map - Virtual Dungeon.png']],
         [/windhym/i, ['File:Map - Windhym.png']],
         [/fabled/i, ['File:Map - Fabled Kingdom.png']],
         [/cursed[\s_-]*academy|jujutsu/i, ['File:Map - Cursed Academy.png']],
@@ -1671,10 +1769,17 @@ function Hub.Render()
 			if e.runId and e.runId ~= lastRunId then
 				lastRunId = e.runId
 				order = order + 1
-				local runLabel = "▸ จบด่าน: " .. tostring(e.stageName or "?") .. " (" .. tostring(e.t) .. " น.)"
-				if e.stageTimer and e.stageTimer ~= "" then runLabel = runLabel .. " • " .. e.stageTimer end
-				local h = addHeader(runLabel, Color3.fromRGB(120, 225, 255))
-				h.LayoutOrder = order
+				local hb = addBox(46)
+				hb.LayoutOrder = order
+				hb.BackgroundColor3 = Color3.fromRGB(22, 34, 42)
+				local hStroke = Instance.new("UIStroke", hb)
+				hStroke.Color = Color3.fromRGB(28, 128, 96); hStroke.Thickness = 1
+				thumb(hb, 36, 5, 5, e.stageImg, nil, Color3.fromRGB(16, 245, 160), "S")
+				local subParts = { tostring(e.t) .. " น." }
+				if e.stageDifficulty and e.stageDifficulty ~= "" then subParts[#subParts + 1] = tostring(e.stageDifficulty) end
+				if e.stageWaves and e.stageWaves ~= "" then subParts[#subParts + 1] = tostring(e.stageWaves) end
+				if e.stageTimer and e.stageTimer ~= "" then subParts[#subParts + 1] = tostring(e.stageTimer) end
+				twoLine(hb, "จบด่าน: " .. tostring(e.stageName or "?"), table.concat(subParts, " • "), Color3.fromRGB(16, 245, 160), 48, nil)
 			end
 			order = order + 1
 			local r = addBox(42)
@@ -1683,7 +1788,8 @@ function Hub.Render()
 			if src and budget <= 0 then src = nil end
 			if src then budget = budget - 1 end
 			thumb(r, 32, 5, 5, e.img, src, rcol(e.rarity), string.sub(tostring(e.name), 1, 1))
-			twoLine(r, e.name, tostring(e.rarity) .. " • " .. tostring(e.stageName or "จบด่าน") .. " • " .. tostring(e.t), rcol(e.rarity), 44, "+" .. tostring(e.qty))
+			local dispName = e.tier and (tostring(e.name) .. " [" .. tostring(e.tier) .. "]") or tostring(e.name)
+			twoLine(r, dispName, tostring(e.rarity) .. " • " .. tostring(e.stageName or "จบด่าน") .. " • " .. tostring(e.t), rcol(e.rarity), 44, "+" .. tostring(e.qty))
 		end
 
 	elseif Hub.Tab == "team" then
@@ -1707,7 +1813,7 @@ function Hub.Render()
 
 	elseif Hub.Tab == "bag" then
 		local list = Hub.Bag or {}
-		addHeader("กระเป๋า (" .. #list .. " รายการ — ไอเทม + ยูนิต)")
+		addHeader("กระเป๋า (" .. #list .. " รายการ — แยก Portals / Charms + Tier)")
 		if #list == 0 then addNote("กำลังอ่านกระเป๋า... หรือกดปุ่ม 'รีเฟรช'") end
 		local budget = 20
 		local lastCat, order = nil, 0
@@ -1715,7 +1821,10 @@ function Hub.Render()
 			order = order + 1
 			if e.group ~= lastCat then
 				lastCat = e.group
-				local h = addHeader("▸ " .. tostring(e.group), Color3.fromRGB(160, 200, 255))
+				local hCol = (e.group == "Portals" and Color3.fromRGB(130, 220, 255))
+					or (e.group == "Charms" and Color3.fromRGB(255, 195, 110))
+					or Color3.fromRGB(160, 200, 255)
+				local h = addHeader("▸ " .. tostring(e.group), hCol)
 				h.LayoutOrder = order
 				order = order + 1
 			end
@@ -1728,17 +1837,18 @@ function Hub.Render()
 				if src then budget = budget - 1 end
 			end
 			thumb(r, 32, 5, 5, e.img, src, rcol(e.rarity), string.sub(tostring(e.name), 1, 1))
-			twoLine(r, e.name, tostring(e.rarity) .. " • " .. tostring(e.group), rcol(e.rarity), 44, "x" .. tostring(e.qty))
+			local dispName = e.tier and (tostring(e.name) .. " [" .. tostring(e.tier) .. "]") or tostring(e.name)
+			twoLine(r, dispName, tostring(e.rarity) .. " • " .. tostring(e.group), rcol(e.rarity), 44, "x" .. tostring(e.qty))
 		end
 	end
 
 	local stats = Hub.CurrentStats or {}
 	local assetSuffix = (Hub.AssetStatus and Hub.AssetStatus ~= "") and (" • " .. tostring(Hub.AssetStatus)) or ""
-	footer.Text = string.format("Lv.%s • Gold %s • Gems %s • XP %s\\nเว็บ: %s%s",
+	footer.Text = string.format("Lv.%s • Gold %s • Gems %s • Pearls %s\\nเว็บ: %s%s",
 		tostring(Hub.PlayerLevel or "?"),
 		tostring(math.floor(stats.gold_amount or 0)),
 		tostring(math.floor(stats.gem_amount or 0)),
-		tostring(math.floor(stats.player_xp or 0)),
+		tostring(math.floor(stats.summer_pearls or stats.resource or 0)),
 		tostring(Hub.SyncStatus or "..."),
 		assetSuffix)
 end
@@ -1796,6 +1906,11 @@ local Hub = {
 	SyncOk = false,
 	HttpBlocked = false,
 	Profile = nil,
+	CurrencyIcons = {
+		gold = "rbxassetid://100751534594369",
+		gems = "rbxassetid://71405874061254",
+		summerPearls = nil,
+	},
 	UploadedAssets = {},
 	UploadTried = {},
 	AssetStatus = "",
@@ -1927,6 +2042,7 @@ local GuiAs = Assets and Assets:FindFirstChild("gui")
 local OverrideIcons = GuiAs and GuiAs:FindFirstChild("_OverrideItemIcons")
 
 local RES_ICON = {}
+local RES_ICON_LOW = {}
 pcall(function()
 	local res = GuiAs and GuiAs:FindFirstChild("_Resource")
 	if res then
@@ -1934,6 +2050,7 @@ pcall(function()
 			for _, d in ipairs(c:GetDescendants()) do
 				if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" then
 					RES_ICON[c.Name] = d.Image
+					RES_ICON_LOW[c.Name:lower():gsub("[^a-z0-9]", "")] = d.Image
 					break
 				end
 			end
@@ -1957,6 +2074,97 @@ local function iGroup(id) local d = itemDef(id); return (type(d) == "table" and 
 local function uName(id) local d = unitDef(id); return (type(d) == "table" and d.name) or tostring(id) end
 local function uRarity(id) local d = unitDef(id); return (type(d) == "table" and d.rarity) or "Common" end
 
+local function classifyItemGroup(rawGroup, id, name)
+	local g = tostring(rawGroup or "")
+	local lg = g:lower()
+	local hay = (tostring(id or "") .. " " .. tostring(name or "")):lower()
+	if lg:find("portal", 1, true) or hay:find("portal", 1, true) then return "Portals" end
+	if lg:find("charm", 1, true) or hay:find("charm", 1, true) then return "Charms" end
+	return (g ~= "" and g) or "Other"
+end
+
+local function normalizeTierVal(v)
+	if type(v) == "number" then
+		local n = math.floor(v)
+		if n >= 1 and n <= 99 then return "Tier " .. tostring(n) end
+	elseif type(v) == "string" then
+		local s = v:match("^%s*(.-)%s*$")
+		if s and s ~= "" then
+			local n1 = s:lower():match("^tier%s*(%d+)$") or s:match("^(%d+)$")
+			if n1 then
+				local num = tonumber(n1)
+				if num and num >= 1 and num <= 99 then return "Tier " .. tostring(math.floor(num)) end
+			end
+			if s:lower():sub(1, 5) == "tier " then return s:sub(1, 20) end
+			if s:match("^[IVXS]+[%+%-]?$") and #s <= 4 then return "Tier " .. s end
+		end
+	end
+	return nil
+end
+
+local function tierOrderNum(tierStr)
+	if type(tierStr) ~= "string" then return 0 end
+	local n = tierStr:match("(%d+)")
+	return tonumber(n) or 0
+end
+
+local TIER_DIRECT_KEYS = {
+	"_portal_tier", "portal_tier", "portalTier", "tier", "_tier", "Tier",
+	"charm_tier", "_charm_tier", "charmTier", "item_tier", "_item_tier",
+}
+
+local function extractItemTier(u, itemId)
+	if type(u) == "table" then
+		for _, k in ipairs(TIER_DIRECT_KEYS) do
+			local t = normalizeTierVal(rawget(u, k))
+			if t then return t end
+		end
+		local visited = {}
+		local function walkTier(tbl, depth)
+			if depth > 3 or visited[tbl] then return nil end
+			visited[tbl] = true
+			for k, v in pairs(tbl) do
+				if type(k) == "string" then
+					local lk = k:lower()
+					if lk:find("tier", 1, true) then
+						local t = normalizeTierVal(v)
+						if t then return t end
+					end
+				end
+			end
+			for _, v in pairs(tbl) do
+				if type(v) == "table" then
+					local t = walkTier(v, depth + 1)
+					if t then return t end
+				end
+			end
+			return nil
+		end
+		local deep = walkTier(u, 0)
+		if deep then return deep end
+	end
+	local def = itemId and itemDef(itemId) or nil
+	if type(def) == "table" then
+		for _, k in ipairs(TIER_DIRECT_KEYS) do
+			local t = normalizeTierVal(def[k])
+			if t then return t end
+		end
+		if type(def.name) == "string" then
+			local mn = def.name:lower():match("tier%s*(%d+)")
+			if mn then return "Tier " .. tostring(tonumber(mn)) end
+		end
+	end
+	if type(itemId) == "string" then
+		local lid = itemId:lower()
+		local m = lid:match("charm[_%-]+(%d+)$")
+			or lid:match("portal[_%-]+(%d+)$")
+			or lid:match("[_%-]tier[_%-]*(%d+)$")
+			or lid:match("[_%-]t(%d+)$")
+		if m then return "Tier " .. tostring(tonumber(m)) end
+	end
+	return nil
+end
+
 local function itemImg(id)
 	if not id then return nil end
 	if OverrideIcons then
@@ -1975,6 +2183,81 @@ local function itemImg(id)
 		end
 	end
 	return nil
+end
+
+local function scanGuiCurrencyIcon(keywords)
+	local guiCandidates = { "ResultsUI", "HUD", "MainUI", "Currencies", "TopBar", "spawn_units", "LevelRewards" }
+	for _, gn in ipairs(guiCandidates) do
+		local g = PG:FindFirstChild(gn)
+		if g then
+			for _, d in ipairs(g:GetDescendants()) do
+				if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" and extractAssetId(d.Image) then
+					local nm = (d.Name .. " " .. (d.Parent and d.Parent.Name or "") .. " " .. (d.Parent and d.Parent.Parent and d.Parent.Parent.Name or "")):lower()
+					for _, kw in ipairs(keywords) do
+						if nm:find(kw, 1, true) then return d.Image end
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function resolveCurrencyIcon(key)
+	local k = tostring(key or "")
+	local lk = k:lower():gsub("[^a-z0-9]", "")
+	if RES_ICON[k] then return RES_ICON[k] end
+	if RES_ICON_LOW[lk] then return RES_ICON_LOW[lk] end
+	local isPearl = lk:find("pearl", 1, true) or lk:find("summer", 1, true)
+	local isGold = lk:find("gold", 1, true)
+	local isGem = lk:find("gem", 1, true)
+
+	if isPearl then
+		for rn, rimg in pairs(RES_ICON) do
+			local lrn = rn:lower()
+			if lrn:find("pearl", 1, true) or lrn:find("summer", 1, true) or lrn:find("shell", 1, true) then
+				return rimg
+			end
+		end
+		for _, cand in ipairs({ "SummerPearls", "summer_pearls", "Summer_Pearls", "SummerPearl", "summer_pearl", "Pearls", "pearls", "summer2_currency", "summer_currency" }) do
+			local im = itemImg(cand)
+			if im then return im end
+		end
+		if type(Items) == "table" then
+			for iid, def in pairs(Items) do
+				local hay = (tostring(iid) .. " " .. tostring(type(def) == "table" and def.name or "")):lower()
+				if hay:find("pearl", 1, true) then
+					local im = itemImg(iid)
+					if im then return im end
+				end
+			end
+		end
+		local hudImg = scanGuiCurrencyIcon({ "pearl", "summerpearl", "summer_pearl" })
+		if hudImg then return hudImg end
+		if Hub.CurrencyIcons.summerPearls then return Hub.CurrencyIcons.summerPearls end
+	elseif isGold then
+		return RES_ICON.Gold or RES_ICON_LOW.gold or scanGuiCurrencyIcon({ "goldreward", "gold" }) or "rbxassetid://100751534594369"
+	elseif isGem then
+		return RES_ICON.Gems or RES_ICON_LOW.gems or RES_ICON_LOW.gem or scanGuiCurrencyIcon({ "gemreward", "gem" }) or "rbxassetid://71405874061254"
+	end
+	local directItem = itemImg(k)
+	if directItem then return directItem end
+	for rn, rimg in pairs(RES_ICON) do
+		local lrn = rn:lower():gsub("[^a-z0-9]", "")
+		if #lrn >= 3 and (lk:find(lrn, 1, true) or lrn:find(lk, 1, true)) then
+			return rimg
+		end
+	end
+	return nil
+end
+
+function Hub.RefreshCurrencyIcons()
+	local gImg = resolveCurrencyIcon("gold")
+	local gmImg = resolveCurrencyIcon("gems")
+	local spImg = resolveCurrencyIcon("summer_pearls")
+	if gImg then Hub.CurrencyIcons.gold = gImg end
+	if gmImg then Hub.CurrencyIcons.gems = gmImg end
+	if spImg then Hub.CurrencyIcons.summerPearls = spImg end
 end
 
 local function itemModel(id)
@@ -2256,51 +2539,99 @@ function Hub.ScanAndUploadGameAssets(force)
 			local queuedId = {}
 			local function enqueue(imgUri, kind, label, maxDim, useAlpha)
 				local aid = extractAssetId(imgUri)
-				if not aid or queuedId[aid] or #queue >= 12 then return end
+				if not aid or queuedId[aid] or #queue >= 42 then return end
 				queuedId[aid] = true
-				queue[#queue + 1] = { uri = imgUri, kind = kind, label = label, maxDim = maxDim, useAlpha = useAlpha }
+				queue[#queue + 1] = { aid = aid, uri = imgUri, kind = kind, label = label, maxDim = maxDim, useAlpha = useAlpha }
 			end
 
-			-- 1) รูปด่านปัจจุบัน (ความสำคัญสูงสุด)
+			pcall(Hub.RefreshCurrencyIcons)
+
+			-- 1) รูปด่านปัจจุบัน + ไอคอนสกุลเงินหลัก (Gold / Gems / Summer Pearls) ความสำคัญสูงสุด
 			if Hub.Stage and Hub.Stage.mapImg then
 				enqueue(Hub.Stage.mapImg, "stage", Hub.Stage.name or Hub.Stage.map or "Stage", 160, false)
 			end
-			-- 2) ไอคอนสกุลเงิน/ทรัพยากรในเกม (_Resource)
+			if Hub.CurrencyIcons.summerPearls then
+				enqueue(Hub.CurrencyIcons.summerPearls, "currency", "Summer Pearls", 72, true)
+			end
+			if Hub.CurrencyIcons.gold then
+				enqueue(Hub.CurrencyIcons.gold, "currency", "Gold", 72, true)
+			end
+			if Hub.CurrencyIcons.gems then
+				enqueue(Hub.CurrencyIcons.gems, "currency", "Gems", 72, true)
+			end
+			-- 2) รูปด่าน + ไอคอนของรางวัลในประวัติจบด่านล่าสุด
+			for i = 1, math.min(#Hub.Rewards, 24) do
+				local rw = Hub.Rewards[i]
+				if rw.stageImg then enqueue(rw.stageImg, "stage", rw.stageName or rw.stageMap or "Stage", 160, false) end
+				if rw.img then enqueue(rw.img, rw.kind or "item", rw.name or rw.id, 72, true) end
+			end
+			-- 3) ไอคอนสกุลเงิน/ทรัพยากรในเกม (_Resource)
 			for resName, resUri in pairs(RES_ICON) do
 				enqueue(resUri, "currency", resName, 72, true)
 			end
-			-- 3) ไอคอนไอเทมในกระเป๋าที่มีรูปจาก _OverrideItemIcons
+			-- 4) ไอคอนไอเทมในกระเป๋า (ให้ความสำคัญ Portals / Charms ก่อน)
 			local itemCount = 0
 			for _, it in ipairs(Hub.Bag or {}) do
-				if it.img and itemCount < 6 then
+				if it.img and itemCount < 16 then
 					itemCount = itemCount + 1
 					enqueue(it.img, "item", it.name or it.id, 72, true)
 				end
 			end
-			-- 4) รูปด่านอื่นๆ ใน MapIcons (สูงสุดไม่เกินโควต้ารวม 12)
+			-- 5) รูปด่านอื่นๆ ใน MapIcons (สูงสุดรวม 42 รูป)
 			if MapIcons then
 				for _, child in ipairs(MapIcons:GetChildren()) do
-					if #queue >= 12 then break end
+					if #queue >= 42 then break end
 					local img = firstImageInside(child)
 					if img then enqueue(img, "stage", child.Name, 160, false) end
 				end
 			end
 
+			-- เช็คหลาย ID พร้อมกันทีเดียวเพื่อข้ามรูปที่เคยอัปแล้วโดยไม่เปลือง Request
+			for startIdx = 1, #queue, 24 do
+				local idsBatch = {}
+				for j = startIdx, math.min(#queue, startIdx + 23) do
+					local aid = queue[j].aid
+					if not Hub.UploadedAssets[aid] then idsBatch[#idsBatch + 1] = aid end
+				end
+				if #idsBatch > 0 then
+					local okB, bRes = pcall(function()
+						return httpRequest({
+							Url = BASE_API .. "/api/asset-exists?ids=" .. table.concat(idsBatch, ","),
+							Method = "GET",
+							Headers = { ["Accept"] = "application/json" },
+						})
+					end)
+					if okB and bRes then
+						local decOk, dec = pcall(function()
+							return HttpService:JSONDecode(tostring(bRes.Body or bRes.body or ""))
+						end)
+						if decOk and type(dec) == "table" and type(dec.existing) == "table" then
+							for _, exId in ipairs(dec.existing) do
+								Hub.UploadedAssets[tostring(exId)] = true
+							end
+						end
+					end
+				end
+			end
+
 			for _, job in ipairs(queue) do
 				if not Hub.Running then break end
-				local ok, status = Hub.UploadGameAsset(job.uri, job.kind, job.label, job.maxDim, job.useAlpha)
-				if status == "uploaded" then
-					uploaded = uploaded + 1
-					task.wait(0.8)
-				elseif status == "exists" or status == "cached" then
+				if Hub.UploadedAssets[job.aid] then
 					already = already + 1
 				else
-					locked = locked + 1
-					-- ถ้า Roblox ล็อก EditableImage ทั้งเครื่อง หยุดลองซ้ำหลัง 2 รูปเพื่อไม่ให้เสียเวลา
-					if locked >= 2 and uploaded == 0 and tostring(status):find("locked:") then
-						break
+					local _, status = Hub.UploadGameAsset(job.uri, job.kind, job.label, job.maxDim, job.useAlpha)
+					if status == "uploaded" then
+						uploaded = uploaded + 1
+						task.wait(0.4)
+					elseif status == "exists" or status == "cached" then
+						already = already + 1
+					else
+						locked = locked + 1
+						if locked >= 3 and uploaded == 0 and tostring(status):find("locked:") then
+							break
+						end
+						task.wait(0.25)
 					end
-					task.wait(0.3)
 				end
 			end
 		end)
@@ -2369,13 +2700,23 @@ local function findProfile()
 end
 
 function Hub.SnapStats()
-	local t = {}
+	local t = { _res = {} }
 	local s = LP:FindFirstChild("_stats")
 	if s then
 		for _, c in ipairs(s:GetChildren()) do
 			if c:IsA("ValueBase") then
 				local ok, v = pcall(function() return c.Value end)
-				if ok and type(v) == "number" then t[c.Name] = v end
+				if ok and type(v) == "number" then
+					local nm = c.Name
+					local low = nm:lower()
+					t[nm] = v
+					if low:sub(1, 9) == "_resource" and #nm > 9 then
+						local rk = nm:sub(10)
+						t._res[rk] = v
+					elseif low:find("pearl", 1, true) or low:find("summer", 1, true) then
+						t._res[nm] = v
+					end
+				end
 			end
 		end
 	end
@@ -2383,7 +2724,57 @@ function Hub.SnapStats()
 	if p then
 		if not t.gold_amount and type(rawget(p, "gold_amount")) == "number" then t.gold_amount = rawget(p, "gold_amount") end
 		if not t.gem_amount and type(rawget(p, "gem_amount")) == "number" then t.gem_amount = rawget(p, "gem_amount") end
+		for _, resField in ipairs({ "resources", "_resources" }) do
+			local rTbl = rawget(p, resField)
+			if type(rTbl) == "table" then
+				for rk, rv in pairs(rTbl) do
+					if type(rv) == "number" then
+						local keyStr = tostring(rk)
+						if t._res[keyStr] == nil or rv > t._res[keyStr] then
+							t._res[keyStr] = rv
+						end
+					end
+				end
+			end
+		end
+		local inv = rawget(p, "inventory")
+		local ni = type(inv) == "table" and rawget(inv, "normal_items") or nil
+		if type(ni) == "table" then
+			for id, amt in pairs(ni) do
+				if type(id) == "string" and type(amt) == "number" and amt > 0 then
+					local lid = id:lower()
+					if lid:find("pearl", 1, true) then
+						if t._res[id] == nil or amt > t._res[id] then t._res[id] = amt end
+					end
+				end
+			end
+		end
 	end
+
+	-- หาค่า Summer Pearls จริงจาก _stats._resource* / profile.resources / fallback stats.resource
+	local pearlVal = nil
+	for rk, rv in pairs(t._res) do
+		local lrk = rk:lower()
+		if lrk:find("pearl", 1, true) then
+			pearlVal = rv
+			break
+		end
+	end
+	if pearlVal == nil then
+		for rk, rv in pairs(t._res) do
+			local lrk = rk:lower()
+			if lrk:find("summer", 1, true) then
+				pearlVal = rv
+				break
+			end
+		end
+	end
+	if pearlVal == nil and type(t.resource) == "number" then
+		pearlVal = t.resource
+	end
+	t.summer_pearls = pearlVal or 0
+
+	pcall(Hub.RefreshCurrencyIcons)
 	Hub.CurrentStats = t
 	local lvNum = parseQty(txt(PG:FindFirstChild("spawn_units"), "Main.Desc.Level"))
 	if lvNum <= 0 then
@@ -2418,7 +2809,12 @@ function Hub.SnapProf()
 			local ui = rawget(inv, "unique_items")
 			if type(ui) == "table" then
 				for uuid, u in pairs(ui) do
-					if type(u) == "table" and type(u.item_id) == "string" then uniques[tostring(uuid)] = u.item_id end
+					if type(u) == "table" and type(u.item_id) == "string" then
+						uniques[tostring(uuid)] = {
+							id = u.item_id,
+							tier = extractItemTier(u, u.item_id),
+						}
+					end
 				end
 			end
 		end
@@ -2550,9 +2946,12 @@ function Hub.ReadBag()
 				if type(id) == "string" and q > 0 then
 					nKinds = nKinds + 1
 					local img = itemImg(id)
+					local nm = iName(id)
+					local grp = classifyItemGroup(iGroup(id), id, nm)
 					out[#out + 1] = {
 						kind = "normal", id = id, qty = q,
-						name = iName(id), rarity = iRarity(id), group = iGroup(id),
+						name = nm, rarity = iRarity(id), group = grp,
+						tier = extractItemTier(nil, id),
 						img = img, iconId = extractAssetId(img),
 					}
 				end
@@ -2564,15 +2963,26 @@ function Hub.ReadBag()
 			for _, u in pairs(ui) do
 				if type(u) == "table" and type(u.item_id) == "string" then
 					uTotal = uTotal + 1
-					if not agg[u.item_id] then agg[u.item_id] = 0; order[#order + 1] = u.item_id end
-					agg[u.item_id] = agg[u.item_id] + 1
+					local iid = u.item_id
+					local tier = extractItemTier(u, iid)
+					local key = iid .. "|" .. tostring(tier or "")
+					if not agg[key] then
+						agg[key] = { id = iid, tier = tier, qty = 0 }
+						order[#order + 1] = key
+					end
+					agg[key].qty = agg[key].qty + 1
 				end
 			end
-			for _, iid in ipairs(order) do
+			for _, key in ipairs(order) do
+				local rec = agg[key]
+				local iid = rec.id
 				local img = itemImg(iid)
+				local nm = iName(iid)
+				local grp = classifyItemGroup(iGroup(iid), iid, nm)
 				out[#out + 1] = {
-					kind = "unique", id = iid, qty = agg[iid],
-					name = iName(iid), rarity = iRarity(iid), group = iGroup(iid),
+					kind = "unique", id = iid, qty = rec.qty,
+					name = nm, rarity = iRarity(iid), group = grp,
+					tier = rec.tier,
 					img = img, iconId = extractAssetId(img),
 				}
 			end
@@ -2599,8 +3009,16 @@ function Hub.ReadBag()
 		end
 	end
 
+	local GROUP_PRIORITY = { Portals = 1, Charms = 2 }
 	table.sort(out, function(a, b)
-		if a.group ~= b.group then return tostring(a.group) < tostring(b.group) end
+		if a.group ~= b.group then
+			local pa = GROUP_PRIORITY[a.group] or 99
+			local pb = GROUP_PRIORITY[b.group] or 99
+			if pa ~= pb then return pa < pb end
+			return tostring(a.group) < tostring(b.group)
+		end
+		local ta, tb = tierOrderNum(a.tier), tierOrderNum(b.tier)
+		if ta ~= tb then return ta > tb end
 		return tostring(a.name) < tostring(b.name)
 	end)
 	Hub.Bag = out
@@ -2746,6 +3164,7 @@ local function buildPayloadJson()
 			qty = it.qty,
 			kind = it.kind,
 			iconId = it.iconId,
+			tier = it.tier,
 		}
 	end
 
@@ -2762,6 +3181,7 @@ local function buildPayloadJson()
 			qty = r.qty,
 			src = r.src,
 			iconId = r.iconId,
+			tier = r.tier,
 			runId = r.runId,
 			stageName = r.stageName,
 			stageWorld = r.stageWorld,
@@ -2776,6 +3196,16 @@ local function buildPayloadJson()
 
 	local st = Hub.Stage or { inLobby = true, name = "ล็อบบี้" }
 	local stats = Hub.CurrentStats or {}
+	local eventResOut = {}
+	local hasEventRes = false
+	if type(stats._res) == "table" then
+		for rk, rv in pairs(stats._res) do
+			if type(rv) == "number" and rv > 0 then
+				eventResOut[tostring(rk)] = math.floor(rv)
+				hasEventRes = true
+			end
+		end
+	end
 	local payload = {
 		syncKey = SYNC_KEY,
 		username = LP.Name,
@@ -2784,14 +3214,21 @@ local function buildPayloadJson()
 		gold = safeNum(stats.gold_amount),
 		gems = safeNum(stats.gem_amount),
 		level = (Hub.PlayerLevel and Hub.PlayerLevel > 0) and Hub.PlayerLevel or nil,
+		currencyIcons = {
+			gold = extractAssetId(Hub.CurrencyIcons.gold),
+			gems = extractAssetId(Hub.CurrencyIcons.gems),
+			summerPearls = extractAssetId(Hub.CurrencyIcons.summerPearls),
+		},
 		extraStats = {
 			playerXp = safeNum(stats.player_xp),
 			resource = safeNum(stats.resource),
+			summerPearls = safeNum(stats.summer_pearls),
 			trophies = safeNum(stats.trophies),
 			rebirthTokens = safeNum(stats.rebirth_tokens),
 			behelitXp = safeNum(stats.behelit_xp),
 			curseTokens = safeNum(stats.curse_reroll_tokens),
 			traitTokens = safeNum(stats.trait_reroll_tokens),
+			eventResources = hasEventRes and eventResOut or nil,
 		},
 		currentStage = {
 			inLobby = st.inLobby == true,
@@ -2941,7 +3378,6 @@ local STAT_KEYS = {
 	gold_amount = { id = "gold", name = "Gold", rarity = "Legendary", res = "Gold" },
 	gem_amount = { id = "gems", name = "Gems", rarity = "Rare", res = "Gems" },
 	player_xp = { id = "player_xp", name = "XP", rarity = "Epic", res = "Jewels" },
-	resource = { id = "resource", name = "Resource", rarity = "Uncommon", res = "Jewels" },
 	trophies = { id = "trophies", name = "Trophy", rarity = "Mythic", res = "HolidayStars" },
 	rebirth_tokens = { id = "rebirth_tokens", name = "Rebirth Token", rarity = "Secret", res = "_Trait" },
 	behelit_xp = { id = "behelit_xp", name = "Behelit XP", rarity = "Mythic", res = nil },
@@ -2953,26 +3389,47 @@ local RESULT_FIELDS = {
 	{ id = "gold", name = "Gold", path = "Holder.LevelRewards.ScrollingFrame.GoldReward.Main.Amount", imgPath = "Holder.LevelRewards.ScrollingFrame.GoldReward.ImageLabel", rarity = "Legendary", res = "Gold" },
 	{ id = "gems", name = "Gems", path = "Holder.LevelRewards.ScrollingFrame.GemReward.Main.Amount", imgPath = "Holder.LevelRewards.ScrollingFrame.GemReward.ImageLabel", rarity = "Rare", res = "Gems" },
 	{ id = "player_xp", name = "XP", path = "Holder.LevelRewards.ScrollingFrame.XPReward.Main.Amount", imgPath = "Holder.LevelRewards.ScrollingFrame.XPReward.ImageLabel", rarity = "Epic", res = "Jewels" },
-	{ id = "resource", name = "Resource", path = "Holder.LevelRewards.ScrollingFrame.Configuration.ResourceReward.Main.Amount", imgPath = "Holder.LevelRewards.ScrollingFrame.Configuration.ResourceReward.ImageLabel", rarity = "Uncommon", res = "Jewels" },
 	{ id = "trophies", name = "Trophy", path = "Holder.LevelRewards.ScrollingFrame.TrophyReward.Main.Amount", imgPath = "Holder.LevelRewards.ScrollingFrame.TrophyReward.ImageLabel", rarity = "Mythic", res = "HolidayStars" },
 	{ id = "first_clear_gems", name = "First Clear Gems", path = "Holder.Middle.FirstCompletion.GemReward.Main.Amount", imgPath = "Holder.Middle.FirstCompletion.GemReward.ImageLabel", rarity = "Secret", res = "Gems" },
 }
 
+local function isSummerStage(stageName, stageId, stageWorld)
+	local hay = (tostring(stageName or "") .. " " .. tostring(stageId or "") .. " " .. tostring(stageWorld or "")):lower()
+	return hay:find("summer", 1, true) ~= nil or hay:find("pearl", 1, true) ~= nil
+end
+
+local function normalizeEventCurrency(rawId, stageName, stageId, stageWorld)
+	local lid = tostring(rawId or ""):lower():gsub("[^a-z0-9]", "")
+	if lid:find("pearl", 1, true) or lid:find("summer", 1, true)
+		or ((lid == "resource" or lid == "event" or lid == "") and isSummerStage(stageName, stageId, stageWorld)) then
+		return "summer_pearls", "Summer Pearls", "Mythic", resolveCurrencyIcon("summer_pearls")
+	end
+	if lid == "resource" then
+		return "resource", "Resource", "Uncommon", resolveCurrencyIcon("resource") or RES_ICON.Jewels
+	end
+	local pretty = tostring(rawId):gsub("^_resource", ""):gsub("_", " "):match("^%s*(.-)%s*$")
+	if not pretty or pretty == "" then pretty = tostring(rawId) end
+	return tostring(rawId), pretty, "Mythic", resolveCurrencyIcon(rawId)
+end
+
 -- เก็บของที่เด้งจาก RemoteEvent ไว้เงียบๆ ในบัฟเฟอร์ รอส่งพร้อมกันทีเดียวตอนด่านจบ
-local function bufferRemoteDrop(kind, id, qty)
+local function bufferRemoteDrop(kind, id, qty, tier, customName, customRarity, customImg)
 	if Hub.Stage and Hub.Stage.inLobby then return end
-	local k = kind .. "|" .. tostring(id)
+	local cleanTier = tier or (kind == "item" and extractItemTier(nil, id) or nil)
+	local k = kind .. "|" .. tostring(id) .. "|" .. tostring(cleanTier or "")
 	local cur = Hub.PendingDrops[k]
 	if cur then
 		cur.qty = cur.qty + (qty or 1)
+		if not cur.img and customImg then cur.img = customImg; cur.iconId = extractAssetId(customImg) end
 	else
-		local img = (kind == "item") and itemImg(id) or nil
+		local img = customImg or ((kind == "item") and itemImg(id) or (kind == "currency" and resolveCurrencyIcon(id) or nil))
 		Hub.PendingDrops[k] = {
 			kind = kind,
 			id = tostring(id),
-			name = kind == "unit" and uName(id) or iName(id),
-			rarity = kind == "unit" and uRarity(id) or iRarity(id),
+			name = customName or (kind == "unit" and uName(id) or (kind == "item" and iName(id) or tostring(id))),
+			rarity = customRarity or (kind == "unit" and uRarity(id) or (kind == "item" and iRarity(id) or "Mythic")),
 			qty = qty or 1,
+			tier = cleanTier,
 			img = img,
 			iconId = extractAssetId(img),
 		}
@@ -2985,16 +3442,28 @@ local function scanPayloadToBuffer(payload)
 		if depth > 4 then return end
 		if type(v) == "string" then
 			if not seen[v] then
-				if Items[v] then seen[v] = true; bufferRemoteDrop("item", v, 1)
-				elseif Units[v] then seen[v] = true; bufferRemoteDrop("unit", v, 1) end
+				if Items[v] then seen[v] = true; bufferRemoteDrop("item", v, 1, extractItemTier(nil, v))
+				elseif Units[v] then seen[v] = true; bufferRemoteDrop("unit", v, 1, nil) end
 			end
 		elseif type(v) == "table" then
+			local directItemId = v.item_id or v.id
+			local directUnitId = v.unit_id
+			local directAmt = tonumber(v.amount or v.quantity or v.qty or v.value) or 1
+			if type(directUnitId) == "string" and Units[directUnitId] then
+				bufferRemoteDrop("unit", directUnitId, directAmt, nil)
+				return
+			end
+			if type(directItemId) == "string" and Items[directItemId] then
+				bufferRemoteDrop("item", directItemId, directAmt, extractItemTier(v, directItemId))
+				return
+			end
 			for k, vv in pairs(v) do
 				if type(k) == "string" and (Items[k] or Units[k]) then
 					if not seen[k] then
 						seen[k] = true
 						local qty = (type(vv) == "number" and vv > 0 and math.floor(vv)) or 1
-						bufferRemoteDrop(Items[k] and "item" or "unit", k, qty)
+						local t = (type(vv) == "table") and extractItemTier(vv, k) or extractItemTier(nil, k)
+						bufferRemoteDrop(Items[k] and "item" or "unit", k, qty, t)
 					end
 				else
 					walk(vv, depth + 1)
@@ -3012,8 +3481,8 @@ local function flushStageClearRewards(triggerSource)
 	Hub.ResultsSeen = true
 
 	task.spawn(function()
-		-- รอ 1.6 วินาทีให้ ResultsUI + _stats + กระเป๋าอัปเดตครบทุกชิ้นก่อนรวมยอด
-		task.wait(1.6)
+		-- รอ 1.9 วินาทีให้ ResultsUI + _stats + _resource* + profile.resources + กระเป๋าอัปเดตครบทุกชิ้น
+		task.wait(1.9)
 		pcall(function()
 			pcall(Hub.UpdateLocation)
 			local g = PG:FindFirstChild("ResultsUI")
@@ -3025,12 +3494,17 @@ local function flushStageClearRewards(triggerSource)
 
 			local bundle = {}
 			local seenKey = {}
-			local function addBundle(kind, id, name, rarity, qty, img)
+			local seenById = {}
+			local function addBundle(kind, id, name, rarity, qty, img, tier)
 				local q = math.floor(tonumber(qty) or 0)
 				if q <= 0 then return end
-				local key = kind .. "|" .. tostring(id)
+				local key = kind .. "|" .. tostring(id) .. "|" .. tostring(tier or "")
 				if seenKey[key] then
 					if q > seenKey[key].qty then seenKey[key].qty = q end
+					if not seenKey[key].img and img then
+						seenKey[key].img = img
+						seenKey[key].iconId = extractAssetId(img)
+					end
 					return
 				end
 				local entry = {
@@ -3039,14 +3513,16 @@ local function flushStageClearRewards(triggerSource)
 					name = tostring(name),
 					rarity = rarity or "Common",
 					qty = q,
+					tier = tier,
 					img = img,
 					iconId = extractAssetId(img),
 				}
 				seenKey[key] = entry
+				seenById[kind .. "|" .. tostring(id)] = true
 				bundle[#bundle + 1] = entry
 			end
 
-			-- 1) เทียบค่า _stats จริงตั้งแต่เริ่มด่าน -> จบด่าน (แม่นยำที่สุด ไม่มีค่าหลอก 99999)
+			-- 1) เทียบค่า _stats จริงตั้งแต่เริ่มด่าน -> จบด่าน (Gold, Gems, XP, Tokens)
 			local nowStats = Hub.SnapStats()
 			local oldStats = Hub.StageStartStats
 			local statsDeltaById = {}
@@ -3057,13 +3533,48 @@ local function flushStageClearRewards(triggerSource)
 						local d = math.floor(n - o)
 						if d >= 1 then
 							statsDeltaById[meta.id] = d
-							addBundle("currency", meta.id, meta.name, meta.rarity, d, meta.res and RES_ICON[meta.res] or nil)
+							local cIcon = (meta.id == "gold" and Hub.CurrencyIcons.gold)
+								or (meta.id == "gems" and Hub.CurrencyIcons.gems)
+								or (meta.res and RES_ICON[meta.res])
+								or nil
+							addBundle("currency", meta.id, meta.name, meta.rarity, d, cIcon, nil)
+						end
+					end
+				end
+
+				-- 1B) เทียบ Event Currencies (_stats._resource* และ profile.resources เช่น Summer Pearls!)
+				local oldRes = type(oldStats._res) == "table" and oldStats._res or {}
+				local nowRes = type(nowStats._res) == "table" and nowStats._res or {}
+				for rk, nv in pairs(nowRes) do
+					local ov = tonumber(oldRes[rk]) or 0
+					if type(nv) == "number" and nv > ov then
+						local d = math.floor(nv - ov)
+						if d >= 1 then
+							local cid, cname, crar, cimg = normalizeEventCurrency(rk, stageName, st.id, st.world)
+							statsDeltaById[cid] = (statsDeltaById[cid] or 0) + d
+							if cid == "summer_pearls" and cimg then Hub.CurrencyIcons.summerPearls = cimg end
+							addBundle("currency", cid, cname, crar, d, cimg, nil)
+						end
+					end
+				end
+
+				-- 1C) เทียบ _stats.resource (ใน Event Summer ตัว _stats.resource มักเป็น Summer Pearls โดยตรง)
+				local oldR = tonumber(oldStats.resource)
+				local nowR = tonumber(nowStats.resource)
+				if oldR and nowR and nowR > oldR then
+					local d = math.floor(nowR - oldR)
+					if d >= 1 then
+						local cid, cname, crar, cimg = normalizeEventCurrency("resource", stageName, st.id, st.world)
+						if not statsDeltaById[cid] then
+							statsDeltaById[cid] = d
+							if cid == "summer_pearls" and cimg then Hub.CurrencyIcons.summerPearls = cimg end
+							addBundle("currency", cid, cname, crar, d, cimg, nil)
 						end
 					end
 				end
 			end
 
-			-- 2) ดึงรางวัลจากหน้าต่าง ResultsUI เฉพาะช่องที่ Visible จริง และไม่เป็นค่าหลอกเทมเพลต 99999
+			-- 2) ดึงรางวัลจากหน้าต่าง ResultsUI เฉพาะช่องที่ Visible จริง + สแกนช่อง Resource/SummerPearls อัตโนมัติ
 			if g and g.Enabled then
 				for _, f in ipairs(RESULT_FIELDS) do
 					local lbl = idx(g, f.path)
@@ -3071,14 +3582,50 @@ local function flushStageClearRewards(triggerSource)
 						local q = parseQty(lbl.Text)
 						local isTemplateFake = (q == 99999 or q == 999999) and (statsDeltaById[f.id] or 0) < 50000
 						if q > 0 and not isTemplateFake and not statsDeltaById[f.id] then
-							local icon = imgOf(g, f.imgPath) or (f.res and RES_ICON[f.res] or nil)
-							addBundle("currency", f.id, f.name, f.rarity, q, icon)
+							local icon = imgOf(g, f.imgPath)
+								or (f.id == "gold" and Hub.CurrencyIcons.gold)
+								or (f.id == "gems" and Hub.CurrencyIcons.gems)
+								or (f.res and RES_ICON[f.res] or nil)
+							if f.id == "gold" and icon then Hub.CurrencyIcons.gold = icon end
+							if f.id == "gems" and icon then Hub.CurrencyIcons.gems = icon end
+							addBundle("currency", f.id, f.name, f.rarity, q, icon, nil)
+						end
+					end
+				end
+
+				-- สแกนช่อง ResourceReward / SummerPearls ภายใน ResultsUI (ทั้งใต้ ScrollingFrame และ Configuration)
+				local sf = idx(g, "Holder.LevelRewards.ScrollingFrame")
+				if sf then
+					local containers = { sf }
+					local cfg = sf:FindFirstChild("Configuration")
+					if cfg then containers[#containers + 1] = cfg end
+					for _, parentBox in ipairs(containers) do
+						for _, child in ipairs(parentBox:GetChildren()) do
+							local cn = child.Name:lower()
+							if (cn:find("resource", 1, true) or cn:find("pearl", 1, true) or cn:find("summer", 1, true) or cn:find("event", 1, true)) then
+								local amtLbl = idx(child, "Main.Amount") or child:FindFirstChild("Amount", true)
+								if amtLbl and (amtLbl:IsA("TextLabel") or amtLbl:IsA("TextButton")) and isGuiVisible(amtLbl, g) then
+									local q = parseQty(amtLbl.Text)
+									local isTemplateFake = (q == 99999 or q == 999999)
+									local foundImg = firstImageInside(child)
+									local cid, cname, crar, cimg = normalizeEventCurrency(child.Name:gsub("Reward$", ""), stageName, st.id, st.world)
+									if foundImg and cid == "summer_pearls" then
+										Hub.CurrencyIcons.summerPearls = foundImg
+										cimg = foundImg
+									elseif foundImg and not cimg then
+										cimg = foundImg
+									end
+									if q > 0 and not isTemplateFake and not statsDeltaById[cid] then
+										addBundle("currency", cid, cname, crar, q, cimg, nil)
+									end
+								end
+							end
 						end
 					end
 				end
 			end
 
-			-- 3) เทียบกระเป๋าจริงตั้งแต่เริ่มด่าน -> จบด่าน (ไอเทมปกติ + Unique + ยูนิตใหม่)
+			-- 3) เทียบกระเป๋าจริงตั้งแต่เริ่มด่าน -> จบด่าน (ไอเทมปกติ + Unique พร้อม Tier เช่น Charm/Portal + ยูนิตใหม่)
 			local nowProf = Hub.SnapProf()
 			local oldProf = Hub.StageStartProf
 			if type(oldProf) == "table" then
@@ -3086,36 +3633,53 @@ local function flushStageClearRewards(triggerSource)
 				for id, amt in pairs(nowProf.items) do
 					local o = oldProf.items[id] or 0
 					if amt > o then
-						profDrops[#profDrops + 1] = { kind = "item", id = id, qty = math.floor(amt - o) }
+						profDrops[#profDrops + 1] = { kind = "item", id = id, qty = math.floor(amt - o), tier = extractItemTier(nil, id) }
 					end
 				end
-				local uAgg = {}
-				for uuid, iid in pairs(nowProf.uniques) do
-					if not oldProf.uniques[uuid] then uAgg[iid] = (uAgg[iid] or 0) + 1 end
+				local uAgg, uOrder = {}, {}
+				for uuid, rec in pairs(nowProf.uniques) do
+					if not oldProf.uniques[uuid] then
+						local iid = (type(rec) == "table" and rec.id) or tostring(rec)
+						local tier = (type(rec) == "table" and rec.tier) or extractItemTier(nil, iid)
+						local uk = iid .. "|" .. tostring(tier or "")
+						if not uAgg[uk] then
+							uAgg[uk] = { id = iid, tier = tier, qty = 0 }
+							uOrder[#uOrder + 1] = uk
+						end
+						uAgg[uk].qty = uAgg[uk].qty + 1
+					end
 				end
-				for iid, q in pairs(uAgg) do
-					profDrops[#profDrops + 1] = { kind = "item", id = iid, qty = q }
+				for _, uk in ipairs(uOrder) do
+					local rec = uAgg[uk]
+					profDrops[#profDrops + 1] = { kind = "item", id = rec.id, qty = rec.qty, tier = rec.tier }
 				end
 				local unitAgg = {}
 				for uuid, uid in pairs(nowProf.units) do
 					if not oldProf.units[uuid] then unitAgg[uid] = (unitAgg[uid] or 0) + 1 end
 				end
 				for uid, q in pairs(unitAgg) do
-					profDrops[#profDrops + 1] = { kind = "unit", id = uid, qty = q }
+					profDrops[#profDrops + 1] = { kind = "unit", id = uid, qty = q, tier = nil }
 				end
 
 				-- กันโปรไฟล์รีโหลดทั้งกระเป๋า (โผล่พร้อมกันเกิน 25 ชนิด)
 				if #profDrops <= 25 then
 					for _, d in ipairs(profDrops) do
 						local img = (d.kind == "item") and itemImg(d.id) or nil
-						addBundle(d.kind, d.id, d.kind == "unit" and uName(d.id) or iName(d.id), d.kind == "unit" and uRarity(d.id) or iRarity(d.id), d.qty, img)
+						addBundle(d.kind, d.id, d.kind == "unit" and uName(d.id) or iName(d.id), d.kind == "unit" and uRarity(d.id) or iRarity(d.id), d.qty, img, d.tier)
 					end
 				end
 			end
 
-			-- 4) รวมของจาก RemoteEvent ที่บัฟเฟอร์ไว้ระหว่างด่าน (ถ้ายังไม่อยู่ในผลต่างกระเป๋า)
+			-- 4) รวมของจาก RemoteEvent ที่บัฟเฟอร์ไว้ระหว่างด่าน (unit_killed_resource_reward / show_drop_message / อื่นๆ)
 			for _, pDrop in pairs(Hub.PendingDrops) do
-				addBundle(pDrop.kind, pDrop.id, pDrop.name, pDrop.rarity, pDrop.qty, pDrop.img)
+				-- ถ้ามีผลต่างจากกระเป๋าที่มี Tier แล้ว ไม่ต้องเพิ่มซ้ำแบบไม่มี Tier
+				if pDrop.kind == "item" and not pDrop.tier and seenById["item|" .. tostring(pDrop.id)] then
+					-- skip untiered duplicate
+				elseif pDrop.kind == "currency" and statsDeltaById[pDrop.id] then
+					-- skip currency already captured accurately via _stats/_res delta
+				else
+					addBundle(pDrop.kind, pDrop.id, pDrop.name, pDrop.rarity, pDrop.qty, pDrop.img, pDrop.tier)
+				end
 			end
 
 			-- รีเซ็ตฐานพร้อมสำหรับด่านถัดไป
@@ -3131,7 +3695,7 @@ local function flushStageClearRewards(triggerSource)
 
 				for idxItem = #bundle, 1, -1 do
 					local b = bundle[idxItem]
-					local tKey = b.kind .. "|" .. b.id
+					local tKey = b.kind .. "|" .. b.id .. "|" .. tostring(b.tier or "")
 					Hub.Totals[tKey] = (Hub.Totals[tKey] or 0) + b.qty
 					table.insert(Hub.Rewards, 1, {
 						t = nowClock,
@@ -3144,6 +3708,7 @@ local function flushStageClearRewards(triggerSource)
 						src = "stage_clear",
 						img = b.img,
 						iconId = b.iconId,
+						tier = b.tier,
 						runId = runId,
 						stageName = stageName,
 						stageWorld = st.world,
@@ -3152,6 +3717,7 @@ local function flushStageClearRewards(triggerSource)
 						stageGamemode = st.gamemode,
 						stageWaves = stageWaves,
 						stageTimer = stageTimer,
+						stageImg = st.mapImg,
 						stageImageId = st.mapImageId,
 					})
 				end
@@ -3160,7 +3726,8 @@ local function flushStageClearRewards(triggerSource)
 				if Hub.Flags.Notify then
 					local summaryParts = {}
 					for i = 1, math.min(#bundle, 3) do
-						summaryParts[#summaryParts + 1] = bundle[i].name .. " +" .. tostring(bundle[i].qty)
+						local label = bundle[i].tier and (bundle[i].name .. " [" .. bundle[i].tier .. "]") or bundle[i].name
+						summaryParts[#summaryParts + 1] = label .. " +" .. tostring(bundle[i].qty)
 					end
 					local subText = table.concat(summaryParts, " • ")
 					if #bundle > 3 then subText = subText .. " (+" .. tostring(#bundle - 3) .. " อื่นๆ)" end
@@ -3171,6 +3738,23 @@ local function flushStageClearRewards(triggerSource)
 
 				Hub.Tab = "reward"
 				pcall(Hub.Render)
+
+				-- อัปโหลดรูปด่านที่เพิ่งจบ + รูปของรางวัลทุกชิ้น (รวม Summer Pearls / Gold / Gems / Charm / Portal) ขึ้นเว็บก่อนซิงค์
+				if httpRequest and not Hub.HttpBlocked then
+					if st.mapImg and st.mapImageId and not Hub.UploadedAssets[st.mapImageId] then
+						Hub.UploadTried[st.mapImageId] = nil
+						pcall(Hub.UploadGameAsset, st.mapImg, "stage", stageName or st.map, 160, false)
+					end
+					local uploadedThisClear = 0
+					for _, b in ipairs(bundle) do
+						if b.img and b.iconId and not Hub.UploadedAssets[b.iconId] and uploadedThisClear < 10 then
+							Hub.UploadTried[b.iconId] = nil
+							local okUp = pcall(Hub.UploadGameAsset, b.img, b.kind or "item", b.name or b.id, 72, true)
+							if okUp then uploadedThisClear = uploadedThisClear + 1 end
+						end
+					end
+				end
+
 				Hub.SyncToWeb(true, triggerSource or "stage_clear")
 			end
 		end)
@@ -3191,10 +3775,44 @@ local function hookEvent(name, fn)
 	end
 end
 
--- บัฟเฟอร์เงียบๆ ระหว่างด่าน ไม่ส่งทีละอัน
+-- บัฟเฟอร์เงียบๆ ระหว่างด่าน ไม่ส่งทีละอัน (รองรับ Summer Pearls จาก unit_killed_resource_reward + Charm/Portal drops)
 for _, n in ipairs({ "show_unit_and_item_rewards", "unit_added", "unique_item_added", "normal_item_added" }) do
 	hookEvent(n, function(args) scanPayloadToBuffer(args) end)
 end
+hookEvent("show_drop_message", function(args)
+	local a = args[1]
+	if type(a) == "table" then
+		local id = a.item_id or a.id or a.name
+		local amt = tonumber(a.amount or a.quantity or 1) or 1
+		if type(id) == "string" then
+			if Items[id] then
+				bufferRemoteDrop("item", id, amt, extractItemTier(a, id))
+			elseif Units[id] then
+				bufferRemoteDrop("unit", id, amt, nil)
+			else
+				local st = Hub.Stage or {}
+				local cid, cname, crar, cimg = normalizeEventCurrency(id, st.name, st.id, st.world)
+				bufferRemoteDrop("currency", cid, amt, nil, cname, crar, cimg)
+			end
+		end
+	end
+end)
+hookEvent("unit_killed_resource_reward", function(args)
+	local a, b = args[1], args[2]
+	local st = Hub.Stage or {}
+	local rawId, amt = nil, nil
+	if type(a) == "string" and type(b) == "number" then
+		rawId, amt = a, b
+	elseif type(a) == "table" then
+		rawId = a.item_id or a.resource_id or a.id or a.name or a.resource
+		amt = tonumber(a.amount or a.value or a.quantity or a.reward)
+	end
+	if type(rawId) == "string" and type(amt) == "number" and amt > 0 then
+		local cid, cname, crar, cimg = normalizeEventCurrency(rawId, st.name, st.id, st.world)
+		if cid == "summer_pearls" and cimg then Hub.CurrencyIcons.summerPearls = cimg end
+		bufferRemoteDrop("currency", cid, math.floor(amt), nil, cname, crar, cimg)
+	end
+end)
 -- พอจบด่านค่อยรวมส่งทีเดียว
 hookEvent("game_finished", function()
 	flushStageClearRewards("game_finished")

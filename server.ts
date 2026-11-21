@@ -24,6 +24,7 @@ import {
 } from './src/utils/robloxAvatar.ts';
 import type {
   AccountSnapshot,
+  CurrencyIcons,
   ExtraStats,
   InventoryItem,
   RewardEntry,
@@ -198,17 +199,81 @@ function sanitizeStage(raw: unknown, fallback?: StageInfo): StageInfo | undefine
   };
 }
 
+function optTier(raw: unknown, itemId?: string, itemName?: string): string | undefined {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1 && raw <= 99) {
+    return `Tier ${Math.floor(raw)}`;
+  }
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (s) {
+      const mNum = s.match(/^(?:tier\s*)?(\d{1,2})$/i);
+      if (mNum) return `Tier ${Number(mNum[1])}`;
+      if (/^tier\s+/i.test(s)) return s.slice(0, 24);
+      if (/^[IVXS]{1,4}[+-]?$/i.test(s)) return `Tier ${s.toUpperCase()}`;
+      return s.slice(0, 24);
+    }
+  }
+  const idStr = String(itemId || '');
+  const mId =
+    idStr.match(/(?:charm|portal)[_-]+(\d{1,2})$/i) ||
+    idStr.match(/[_-]tier[_-]*(\d{1,2})$/i) ||
+    idStr.match(/[_-]t(\d{1,2})$/i);
+  if (mId) return `Tier ${Number(mId[1])}`;
+  const nameStr = String(itemName || '');
+  const mName = nameStr.match(/\btier\s*(\d{1,2})\b/i);
+  if (mName) return `Tier ${Number(mName[1])}`;
+  return undefined;
+}
+
+function classifyInventoryGroup(rawGroup: string, id: string, name: string, kind: string): string {
+  if (kind === 'unit') return 'Units';
+  const g = (rawGroup || '').trim();
+  const lowG = g.toLowerCase();
+  const hay = `${id} ${name}`.toLowerCase();
+  if (lowG.includes('portal') || hay.includes('portal')) return 'Portals';
+  if (lowG.includes('charm') || hay.includes('charm')) return 'Charms';
+  return g || 'Other';
+}
+
+function sanitizeCurrencyIcons(raw: unknown, fallback?: CurrencyIcons): CurrencyIcons | undefined {
+  if (!raw || typeof raw !== 'object') return fallback;
+  const s = raw as Record<string, unknown>;
+  const out: CurrencyIcons = {
+    gold: cleanAssetId(s.gold) || fallback?.gold,
+    gems: cleanAssetId(s.gems) || fallback?.gems,
+    summerPearls: cleanAssetId(s.summerPearls) || fallback?.summerPearls,
+  };
+  return out.gold || out.gems || out.summerPearls ? out : fallback;
+}
+
 function sanitizeExtraStats(raw: unknown, fallback?: ExtraStats): ExtraStats | undefined {
   if (!raw || typeof raw !== 'object') return fallback;
   const s = raw as Record<string, unknown>;
+  let eventResources: Record<string, number> | undefined;
+  if (s.eventResources && typeof s.eventResources === 'object' && !Array.isArray(s.eventResources)) {
+    const out: Record<string, number> = {};
+    let count = 0;
+    for (const [k, v] of Object.entries(s.eventResources as Record<string, unknown>)) {
+      if (count >= 24) break;
+      const key = String(k).trim().slice(0, 48);
+      const val = optNum(v);
+      if (key && val !== undefined) {
+        out[key] = val;
+        count++;
+      }
+    }
+    if (count > 0) eventResources = out;
+  }
   return {
     playerXp: optNum(s.playerXp),
     resource: optNum(s.resource),
+    summerPearls: optNum(s.summerPearls),
     trophies: optNum(s.trophies),
     rebirthTokens: optNum(s.rebirthTokens),
     behelitXp: optNum(s.behelitXp),
     curseTokens: optNum(s.curseTokens),
     traitTokens: optNum(s.traitTokens),
+    eventResources: eventResources ?? fallback?.eventResources,
   };
 }
 
@@ -233,15 +298,22 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
   const inventory: InventoryItem[] = Array.isArray(payload.inventory)
     ? payload.inventory
         .filter((it) => it && it.id)
-        .map((it): InventoryItem => ({
-          id: String(it.id),
-          name: String(it.name || it.id),
-          rarity: normalizeRarity(it.rarity),
-          group: String(it.group || 'Other'),
-          qty: Math.max(0, Number(it.qty) || 0),
-          kind: it.kind === 'unique' ? 'unique' : it.kind === 'unit' ? 'unit' : 'normal',
-          iconId: cleanAssetId(it.iconId),
-        }))
+        .map((it): InventoryItem => {
+          const id = String(it.id);
+          const name = String(it.name || it.id);
+          const kind: 'normal' | 'unique' | 'unit' =
+            it.kind === 'unique' ? 'unique' : it.kind === 'unit' ? 'unit' : 'normal';
+          return {
+            id,
+            name,
+            rarity: normalizeRarity(it.rarity),
+            group: classifyInventoryGroup(String(it.group || 'Other'), id, name, kind),
+            qty: Math.max(0, Number(it.qty) || 0),
+            kind,
+            iconId: cleanAssetId(it.iconId),
+            tier: optTier(it.tier, id, name),
+          };
+        })
         .filter((it) => it.qty > 0)
     : existing?.inventory ?? [];
 
@@ -251,16 +323,19 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
         .map((r): RewardEntry => {
           const hasTs = typeof r.ts === 'number' && r.ts > 0;
           const ts = hasTs ? r.ts! : now;
+          const id = String(r.id);
+          const name = String(r.name || r.id);
           return {
             t: hasTs ? formatClock(ts) : r.t || formatClock(ts),
             ts,
             kind: r.kind === 'unit' ? 'unit' : r.kind === 'currency' ? 'currency' : 'item',
-            id: String(r.id),
-            name: String(r.name || r.id),
+            id,
+            name,
             rarity: normalizeRarity(r.rarity),
             qty: Math.max(1, Number(r.qty) || 1),
             src: String(r.src || 'sync'),
             iconId: cleanAssetId(r.iconId),
+            tier: optTier(r.tier, id, name),
             runId: optStr(r.runId, 48),
             stageName: optStr(r.stageName, 80),
             stageWorld: optStr(r.stageWorld, 64),
@@ -275,7 +350,8 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     : [];
 
   const mergedRewards: RewardEntry[] = existing ? [...existing.rewards] : [];
-  const rewardSig = (r: RewardEntry) => `${r.runId || r.t}|${r.kind}|${r.id}|${r.qty}|${r.src}`;
+  const rewardSig = (r: RewardEntry) =>
+    `${r.runId || r.t}|${r.kind}|${r.id}|${r.tier || ''}|${r.qty}|${r.src}`;
   const seenSig = new Set(mergedRewards.map(rewardSig));
   const newlyAdded: RewardEntry[] = [];
 
@@ -293,7 +369,7 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
 
   const totals: Record<string, RewardTotal> = {};
   for (const r of finalRewards) {
-    const key = `${r.kind}|${r.id}`;
+    const key = `${r.kind}|${r.id}|${r.tier || ''}`;
     if (!totals[key]) {
       totals[key] = {
         kind: r.kind,
@@ -302,6 +378,7 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
         rarity: r.rarity,
         qty: 0,
         iconId: r.iconId,
+        tier: r.tier,
       };
     } else if (!totals[key].iconId && r.iconId) {
       totals[key].iconId = r.iconId;
@@ -334,6 +411,7 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     gold: typeof payload.gold === 'number' ? payload.gold : existing?.gold ?? 0,
     gems: typeof payload.gems === 'number' ? payload.gems : existing?.gems ?? 0,
     level: typeof payload.level === 'number' ? payload.level : existing?.level,
+    currencyIcons: sanitizeCurrencyIcons(payload.currencyIcons, existing?.currencyIcons),
     extraStats: sanitizeExtraStats(payload.extraStats, existing?.extraStats),
     currentStage: sanitizeStage(payload.currentStage, existing?.currentStage),
     equipped,

@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.6.0';
-export const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 23:45 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.7.0';
+export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 01:20 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,24 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.7.0',
+    updatedAt: '22 พ.ย. 2569 · 01:20 น. (เวลาไทย)',
+    highlights: [
+      'จับรางวัล Summer Pearls (และสกุล Event _resource* / profile.resources / unit_killed_resource_reward) สรุปรวมให้ตอนจบด่าน Event Summer พร้อมไอคอนจริงจากเกม',
+      'อ่าน Tier ของ Charm และ Portal จากข้อมูลไอเทมจริงในเกม พร้อมแสดงป้าย Tier ทั้งตอนจบด่านและแยกหมวด Portals / Charms ตามแต่ละ Tier ในกระเป๋า',
+      'หน้าข้อมูลเปลี่ยนจาก Trophy เป็น Summer Pearls พร้อมสแกนและอัปโหลดรูปจริงจากเกมของ Summer Pearls, ทอง (Gold) และเพชร (Gems) มาแสดงโดยตรง',
+    ],
+  },
+  {
+    version: '2.6.1',
+    updatedAt: '22 พ.ย. 2569 · 00:40 น. (เวลาไทย)',
+    highlights: [
+      'ตอนจบด่านสคริปต์จะอัปโหลด "รูปด่านที่เพิ่งจบ + รูปของดรอปทุกชิ้นในรอบนั้น" จากในเกมขึ้นเว็บก่อนส่งประวัติทันที (ไม่พลาดรูปด่านหรือไอคอนรางวัล)',
+      'อัปเกรดประวัติของดรอปตอนจบด่านทั้งบนเว็บและในเกมให้แสดงรูปด่านและรูปไอเทม/สกุลเงิน/ยูนิตทุกชิ้นแบบชัดเจน',
+      'เพิ่มระบบเช็คหลาย Asset ในครั้งเดียว (/api/asset-exists?ids=...) และขยายโควต้าสแกน MapIcons ในเกมให้ครบทุกด่านมากขึ้น',
+    ],
+  },
   {
     version: '2.6.0',
     updatedAt: '21 พ.ย. 2569 · 23:45 น. (เวลาไทย)',

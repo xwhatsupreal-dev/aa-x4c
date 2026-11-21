@@ -1,0 +1,70 @@
+-- ============================================================
+-- 2K | Anime Adventures v8 — Tier Reader (Portal / Charm / Trait)
+-- สแกนหาคีย์ tier จริงจาก GC + profile แล้วสรุป
+-- ============================================================
+local RS = game:GetService("ReplicatedStorage")
+local LP = game:GetService("Players").LocalPlayer
+
+local function idx(root, path)
+	if not root then return nil end
+	local cur = root
+	for part in string.gmatch(path, "[^%.]+") do
+		if not cur then return nil end
+		cur = cur:FindFirstChild(part)
+	end
+	return cur
+end
+
+-- profile
+local P
+for _, o in ipairs(getgc(true)) do
+	if type(o) == "table" and type(rawget(o, "inventory")) == "table"
+		and type(rawget(o, "level_data")) == "table" then
+		P = o
+		break
+	end
+end
+assert(P, "profile not found")
+
+local function dump(t, depth, seen)
+	depth = depth or 0
+	seen = seen or {}
+	if depth > 2 or seen[t] then return end
+	seen[t] = true
+	local pad = string.rep("  ", depth)
+	for k, v in pairs(t) do
+		if type(v) == "table" then
+			print(("%s%s: TABLE"):format(pad, tostring(k)))
+			dump(v, depth + 1, seen)
+		else
+			print(("%s%s = %s"):format(pad, tostring(k), tostring(v)))
+		end
+	end
+end
+
+print("=== PROFILE TOP ===")
+for k, v in pairs(P) do
+	print(k, type(v))
+end
+
+print("=== INVENTORY ===")
+dump(P.inventory, 0)
+
+print("=== COLLECTION ===")
+if type(P.collection) == "table" then dump(P.collection, 0) end
+
+-- หา key ที่มีคำว่า tier
+local found = {}
+for _, o in ipairs(getgc(true)) do
+	if type(o) == "table" then
+		for k in pairs(o) do
+			if type(k) == "string" and (k:lower():find("tier") or k:lower():find("rarity")) then
+				found[k] = (found[k] or 0) + 1
+			end
+		end
+	end
+end
+print("=== KEYS WITH tier/rarity ===")
+for k, n in pairs(found) do print(k, n) end
+
+return "scan done"

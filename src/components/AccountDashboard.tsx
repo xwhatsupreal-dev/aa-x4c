@@ -113,6 +113,58 @@ function getUnitInitials(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
+const DEFAULT_GOLD_ICON_ID = '100751534594369';
+const DEFAULT_GEMS_ICON_ID = '71405874061254';
+
+function inferItemTier(tier?: string, id?: string, name?: string): string | undefined {
+  if (tier && tier.trim()) return tier.trim();
+  const idStr = String(id || '');
+  const mId =
+    idStr.match(/(?:charm|portal)[_-]+(\d{1,2})$/i) ||
+    idStr.match(/[_-]tier[_-]*(\d{1,2})$/i) ||
+    idStr.match(/[_-]t(\d{1,2})$/i);
+  if (mId) return `Tier ${Number(mId[1])}`;
+  const nameStr = String(name || '');
+  const mName = nameStr.match(/\btier\s*(\d{1,2})\b/i);
+  if (mName) return `Tier ${Number(mName[1])}`;
+  return undefined;
+}
+
+function tierRankValue(tier?: string): number {
+  if (!tier) return 0;
+  const m = tier.match(/(\d+)/);
+  return m ? Number(m[1]) : 0;
+}
+
+function normalizeBagGroup(group: string, id: string, name: string, kind: string): string {
+  if (kind === 'unit') return 'Units';
+  const lowG = (group || '').toLowerCase();
+  const hay = `${id} ${name}`.toLowerCase();
+  if (lowG.includes('portal') || hay.includes('portal')) return 'Portals';
+  if (lowG.includes('charm') || hay.includes('charm')) return 'Charms';
+  return group || 'Other';
+}
+
+function resolveCurrencyIconId(
+  id: string,
+  name: string,
+  explicitIconId?: string,
+  currencyIcons?: AccountSnapshot['currencyIcons']
+): string | undefined {
+  if (explicitIconId) return explicitIconId;
+  const hay = `${id} ${name}`.toLowerCase();
+  if (hay.includes('pearl') || hay.includes('summer')) {
+    return currencyIcons?.summerPearls;
+  }
+  if (hay.includes('gold')) {
+    return currencyIcons?.gold || DEFAULT_GOLD_ICON_ID;
+  }
+  if (hay.includes('gem')) {
+    return currencyIcons?.gems || DEFAULT_GEMS_ICON_ID;
+  }
+  return undefined;
+}
+
 export function AccountDashboard({
   account,
   nowTs,
@@ -181,10 +233,12 @@ export function AccountDashboard({
     const filtered = account.rewards.filter((r) => {
       if (dropRarity !== 'ALL' && r.rarity !== dropRarity) return false;
       if (q) {
+        const tierText = inferItemTier(r.tier, r.id, r.name)?.toLowerCase() ?? '';
         return (
           r.name.toLowerCase().includes(q) ||
           r.id.toLowerCase().includes(q) ||
           r.src.toLowerCase().includes(q) ||
+          tierText.includes(q) ||
           (r.stageName?.toLowerCase().includes(q) ?? false) ||
           (r.stageWorld?.toLowerCase().includes(q) ?? false) ||
           (r.stageDifficulty?.toLowerCase().includes(q) ?? false)
@@ -279,61 +333,139 @@ export function AccountDashboard({
   }, [account.rewards, dropSearch, dropRarity]);
 
   const stage = account.currentStage;
+  const summerPearlsVal = useMemo(() => {
+    const ex = account.extraStats;
+    if (!ex) return 0;
+    if (typeof ex.summerPearls === 'number') return ex.summerPearls;
+    if (ex.eventResources) {
+      for (const [k, v] of Object.entries(ex.eventResources)) {
+        if (/pearl|summer/i.test(k) && typeof v === 'number') return v;
+      }
+    }
+    return ex.resource ?? 0;
+  }, [account.extraStats]);
+
   const extraStatPills = useMemo(() => {
     const ex = account.extraStats;
-    if (!ex) return [];
-    const items: Array<{ label: string; value: number; accent: string }> = [
-      { label: 'Trait', value: ex.traitTokens ?? 0, accent: '#10F5A0' },
-      { label: 'Curse', value: ex.curseTokens ?? 0, accent: '#c084fc' },
-      { label: 'Rebirth', value: ex.rebirthTokens ?? 0, accent: '#f472b6' },
-      { label: 'Trophy', value: ex.trophies ?? 0, accent: '#fbbf24' },
-      { label: 'Resource', value: ex.resource ?? 0, accent: '#60a5fa' },
-      { label: 'XP', value: ex.playerXp ?? 0, accent: '#a78bfa' },
-      { label: 'Behelit', value: ex.behelitXp ?? 0, accent: '#fb7185' },
+    const items: Array<{
+      key: string;
+      label: string;
+      value: number;
+      accent: string;
+      iconId?: string;
+      isSummerPearls?: boolean;
+    }> = [
+      {
+        key: 'summer_pearls',
+        label: 'Summer Pearls',
+        value: summerPearlsVal,
+        accent: '#67e8f9',
+        iconId: account.currencyIcons?.summerPearls,
+        isSummerPearls: true,
+      },
+      { key: 'trait', label: 'Trait', value: ex?.traitTokens ?? 0, accent: '#10F5A0' },
+      { key: 'curse', label: 'Curse', value: ex?.curseTokens ?? 0, accent: '#c084fc' },
+      { key: 'rebirth', label: 'Rebirth', value: ex?.rebirthTokens ?? 0, accent: '#f472b6' },
+      { key: 'xp', label: 'XP', value: ex?.playerXp ?? 0, accent: '#a78bfa' },
+      { key: 'behelit', label: 'Behelit', value: ex?.behelitXp ?? 0, accent: '#fb7185' },
     ];
-    return items.filter((item) => item.value > 0);
-  }, [account.extraStats]);
+    return items.filter((item) => item.isSummerPearls || item.value > 0);
+  }, [account.extraStats, account.currencyIcons?.summerPearls, summerPearlsVal]);
 
   // Sorted aggregated totals (for "ไอเท็มที่ได้รับ" tab)
   const sortedTotals = useMemo(() => {
     return Object.values(account.totals).sort(
-      (a, b) => RARITY_RANK[b.rarity] - RARITY_RANK[a.rarity] || b.qty - a.qty
+      (a, b) =>
+        RARITY_RANK[b.rarity] - RARITY_RANK[a.rarity] ||
+        tierRankValue(inferItemTier(b.tier, b.id, b.name)) -
+          tierRankValue(inferItemTier(a.tier, a.id, a.name)) ||
+        b.qty - a.qty
     );
   }, [account.totals]);
 
-  // Inventory groups + filtered list
+  // Normalized inventory items with guaranteed group separation (Portals / Charms) and inferred Tier
+  const normalizedInventory = useMemo(() => {
+    return account.inventory.map((it) => ({
+      ...it,
+      group: normalizeBagGroup(it.group, it.id, it.name, it.kind),
+      tier: inferItemTier(it.tier, it.id, it.name),
+    }));
+  }, [account.inventory]);
+
+  // Inventory groups — pin Portals & Charms right at the front!
   const invGroups = useMemo(() => {
     const map = new Map<string, number>();
-    for (const it of account.inventory) {
+    for (const it of normalizedInventory) {
       map.set(it.group, (map.get(it.group) ?? 0) + it.qty);
     }
+    const pinnedOrder: Record<string, number> = { Portals: 1, Charms: 2 };
     return Array.from(map.entries())
       .map(([name, total]) => ({ name, total }))
-      .sort((a, b) => b.total - a.total);
-  }, [account.inventory]);
+      .sort((a, b) => {
+        const pa = pinnedOrder[a.name] ?? 99;
+        const pb = pinnedOrder[b.name] ?? 99;
+        if (pa !== pb) return pa - pb;
+        return b.total - a.total;
+      });
+  }, [normalizedInventory]);
 
   const filteredInventory = useMemo(() => {
     const q = invSearch.trim().toLowerCase();
-    const list = account.inventory.filter((it) => {
+    const list = normalizedInventory.filter((it) => {
       if (invGroup !== 'ALL' && it.group !== invGroup) return false;
       if (invRarity !== 'ALL' && it.rarity !== invRarity) return false;
       if (q) {
         return (
           it.name.toLowerCase().includes(q) ||
           it.id.toLowerCase().includes(q) ||
-          it.group.toLowerCase().includes(q)
+          it.group.toLowerCase().includes(q) ||
+          (it.tier?.toLowerCase().includes(q) ?? false)
         );
       }
       return true;
     });
     return [...list].sort((a, b) => {
-      if (invSort === 'qty')
-        return b.qty - a.qty || RARITY_RANK[b.rarity] - RARITY_RANK[a.rarity];
-      if (invSort === 'rarity')
-        return RARITY_RANK[b.rarity] - RARITY_RANK[a.rarity] || b.qty - a.qty;
-      return a.name.localeCompare(b.name);
+      if (invSort === 'qty') {
+        return (
+          b.qty - a.qty ||
+          tierRankValue(b.tier) - tierRankValue(a.tier) ||
+          RARITY_RANK[b.rarity] - RARITY_RANK[a.rarity]
+        );
+      }
+      if (invSort === 'rarity') {
+        return (
+          RARITY_RANK[b.rarity] - RARITY_RANK[a.rarity] ||
+          tierRankValue(b.tier) - tierRankValue(a.tier) ||
+          b.qty - a.qty
+        );
+      }
+      return a.name.localeCompare(b.name) || tierRankValue(b.tier) - tierRankValue(a.tier);
     });
-  }, [account.inventory, invGroup, invRarity, invSearch, invSort]);
+  }, [normalizedInventory, invGroup, invRarity, invSearch, invSort]);
+
+  // Separate Portals & Charms into dedicated sections when viewing ALL in Grid mode
+  const separatedBagSections = useMemo(() => {
+    const portals = filteredInventory
+      .filter((it) => it.group === 'Portals')
+      .sort(
+        (a, b) =>
+          tierRankValue(b.tier) - tierRankValue(a.tier) ||
+          RARITY_RANK[b.rarity] - RARITY_RANK[a.rarity] ||
+          b.qty - a.qty
+      );
+    const charms = filteredInventory
+      .filter((it) => it.group === 'Charms')
+      .sort(
+        (a, b) =>
+          tierRankValue(b.tier) - tierRankValue(a.tier) ||
+          RARITY_RANK[b.rarity] - RARITY_RANK[a.rarity] ||
+          b.qty - a.qty
+      );
+    const others = filteredInventory.filter(
+      (it) => it.group !== 'Portals' && it.group !== 'Charms'
+    );
+    return { portals, charms, others };
+  }, [filteredInventory]);
 
   const handleClearDropsClick = async () => {
     if (clearingDrops || account.rewards.length === 0) return;
@@ -350,7 +482,7 @@ export function AccountDashboard({
   const handleCopyTradeSummary = async () => {
     const lines: string[] = [
       `=== เช็คของ Anime Adventures: ${account.displayName} (@${account.username}) ===`,
-      `Gold: ${formatNumber(account.gold)} | Gems: ${formatNumber(account.gems)}${account.level ? ` | Lv.${account.level}` : ''}`,
+      `Gold: ${formatNumber(account.gold)} | Gems: ${formatNumber(account.gems)} | Summer Pearls: ${formatNumber(summerPearlsVal)}${account.level ? ` | Lv.${account.level}` : ''}`,
       '',
       `[ทีม 6 ตัว]`,
       ...account.equipped.map((u, i) => {
@@ -361,7 +493,10 @@ export function AccountDashboard({
       `[ไอเทมในกระเป๋า (${filteredInventory.length} รายการ)]`,
       ...filteredInventory
         .slice(0, 40)
-        .map((it) => `- ${it.name} (${it.rarity}) x${formatNumber(it.qty)}`),
+        .map(
+          (it) =>
+            `- ${it.name}${it.tier ? ` [${it.tier}]` : ''} (${it.rarity}) x${formatNumber(it.qty)}`
+        ),
     ];
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
@@ -373,10 +508,11 @@ export function AccountDashboard({
   };
 
   const handleExportCsv = () => {
-    const header = ['Item ID', 'Name', 'Group', 'Rarity', 'Type', 'Quantity'];
+    const header = ['Item ID', 'Name', 'Tier', 'Group', 'Rarity', 'Type', 'Quantity'];
     const rows = filteredInventory.map((it) => [
       it.id,
       `"${it.name.replace(/"/g, '""')}"`,
+      it.tier || '',
       it.group,
       it.rarity,
       it.kind,
@@ -606,7 +742,7 @@ export function AccountDashboard({
           </div>
         </div>
 
-        {/* 3-Column Divided Stat Grid (Level / Gems / Gold) */}
+        {/* 3-Column Divided Stat Grid (Level / Gems / Gold with real in-game icons) */}
         <div className="grid grid-cols-3 divide-x divide-white/[0.08] border-t border-white/[0.08]">
           <div className="min-w-0 px-3.5 py-3.5 first:pl-5">
             <span className="flex items-center gap-1 text-xs text-zinc-400">
@@ -622,8 +758,18 @@ export function AccountDashboard({
           </div>
 
           <div className="min-w-0 px-3.5 py-3.5">
-            <span className="flex items-center gap-1 text-xs text-zinc-400">
-              <Gem size={12} className="shrink-0 text-[#10F5A0]" />
+            <span className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <span className="w-4 h-4 shrink-0 flex items-center justify-center">
+                <RobloxAssetThumb
+                  kind="currency"
+                  name="Gems"
+                  itemId="gems"
+                  assetId={account.currencyIcons?.gems || DEFAULT_GEMS_ICON_ID}
+                  alt="Gems"
+                  className="w-4 h-4 object-contain"
+                  fallback={<Gem size={13} className="shrink-0 text-[#10F5A0]" />}
+                />
+              </span>
               <span className="truncate">เพชร</span>
             </span>
             <span
@@ -635,8 +781,18 @@ export function AccountDashboard({
           </div>
 
           <div className="min-w-0 px-3.5 py-3.5 last:pr-5">
-            <span className="flex items-center gap-1 text-xs text-zinc-400">
-              <Coins size={12} className="shrink-0 text-amber-300" />
+            <span className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <span className="w-4 h-4 shrink-0 flex items-center justify-center">
+                <RobloxAssetThumb
+                  kind="currency"
+                  name="Gold"
+                  itemId="gold"
+                  assetId={account.currencyIcons?.gold || DEFAULT_GOLD_ICON_ID}
+                  alt="Gold"
+                  className="w-4 h-4 object-contain"
+                  fallback={<Coins size={13} className="shrink-0 text-amber-300" />}
+                />
+              </span>
               <span className="truncate">ทอง</span>
             </span>
             <span
@@ -648,16 +804,29 @@ export function AccountDashboard({
           </div>
         </div>
 
-        {/* Compact Extra Stats Strip (Trait/Curse/Rebirth Tokens, Trophies, XP, Resource) */}
+        {/* Compact Extra Stats Strip (Summer Pearls with real in-game icon + XP / Tokens) */}
         {extraStatPills.length > 0 && (
-          <div className="border-t border-white/[0.08] px-4 py-2.5 grid grid-cols-3 gap-x-2 gap-y-2 bg-white/[0.015]">
+          <div className="border-t border-white/[0.08] px-4 py-2.5 grid grid-cols-3 gap-x-2 gap-y-2.5 bg-white/[0.015]">
             {extraStatPills.slice(0, 6).map((stat) => (
-              <div key={stat.label} className="min-w-0">
-                <span className="block text-[10px] text-zinc-500 truncate">
-                  {stat.label}
+              <div key={stat.key} className="min-w-0">
+                <span className="flex items-center gap-1 text-[10px] text-zinc-400">
+                  {stat.isSummerPearls && (
+                    <span className="w-3.5 h-3.5 shrink-0 flex items-center justify-center">
+                      <RobloxAssetThumb
+                        kind="currency"
+                        name="Summer Pearls"
+                        itemId="summer_pearls"
+                        assetId={stat.iconId}
+                        alt="Summer Pearls"
+                        className="w-3.5 h-3.5 object-contain"
+                        fallback={<Sparkles size={11} className="text-cyan-300" />}
+                      />
+                    </span>
+                  )}
+                  <span className="truncate">{stat.label}</span>
                 </span>
                 <span
-                  className="block text-xs font-bold font-mono tabular-nums truncate"
+                  className="mt-0.5 block text-xs font-bold font-mono tabular-nums truncate"
                   style={{ color: stat.accent }}
                   title={`${stat.label}: ${formatNumber(stat.value)}`}
                 >
@@ -1266,17 +1435,17 @@ export function AccountDashboard({
                     return (
                       <li
                         key={batch.id}
-                        className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3 py-3.5 sm:grid-cols-[7.25rem_minmax(0,1fr)]"
+                        className="grid grid-cols-[6rem_minmax(0,1fr)] items-start gap-x-3 py-3.5 sm:grid-cols-[7.75rem_minmax(0,1fr)]"
                       >
                         {/* Left Stage Thumbnail Card with Real In-Game Uploaded / Wiki Stage Artwork */}
                         <div
-                          className="relative row-span-1 flex flex-col justify-between aspect-video w-full self-start overflow-hidden rounded-xl p-2 sm:row-span-2 sm:aspect-auto sm:min-h-[4.5rem] sm:self-stretch"
+                          className="relative row-span-1 flex flex-col justify-between aspect-[16/10] w-full self-start overflow-hidden rounded-xl p-2 sm:row-span-2 sm:aspect-auto sm:min-h-[5.25rem] sm:self-stretch"
                           style={{
                             background: `linear-gradient(145deg, ${topMeta.hex}24, rgba(16, 20, 24, 0.96) 75%)`,
                             boxShadow: `inset 0 0 0 1px ${topMeta.border}`,
                           }}
                         >
-                          {(batch.stageName || batch.stageWorld || batch.stageMap || batch.stageImageId) && (
+                          {(batch.stageName || batch.stageWorld || batch.stageMap || batch.stageImageId) ? (
                             <>
                               <RobloxAssetThumb
                                 kind="stage"
@@ -1286,15 +1455,24 @@ export function AccountDashboard({
                                 assetId={batch.stageImageId}
                                 alt={batch.stageName || batch.srcShort}
                                 className="absolute inset-0 w-full h-full object-cover"
+                                fallback={
+                                  <div className="absolute inset-0 flex items-center justify-center text-white/15">
+                                    <Swords size={24} />
+                                  </div>
+                                }
                               />
                               <div
                                 aria-hidden="true"
-                                className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-black/25 pointer-events-none"
+                                className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/30 pointer-events-none"
                               />
                             </>
+                          ) : (
+                            <div className="absolute inset-0 flex items-center justify-center text-white/15 pointer-events-none">
+                              <Sparkles size={22} />
+                            </div>
                           )}
                           <span
-                            className="relative z-10 text-[10px] font-mono font-bold tabular-nums drop-shadow"
+                            className="relative z-10 inline-flex self-start rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-mono font-bold tabular-nums"
                             style={{ color: isStageRun ? '#10F5A0' : topMeta.text }}
                           >
                             {batch.entries.length > 1
@@ -1337,43 +1515,77 @@ export function AccountDashboard({
                           </p>
                         </div>
 
-                        {/* Wrapped Inline Bundled Reward Chips (All drops from this stage clear together) */}
-                        <div className="col-span-2 mt-2 flex flex-wrap gap-1.5 sm:col-span-1 sm:col-start-2">
+                        {/* Wrapped Visual Reward Cards (Stage-clear drops with framed real game artwork + Tier badge) */}
+                        <div className="col-span-2 mt-2.5 flex flex-wrap gap-2 sm:col-span-1 sm:col-start-2">
                           {batch.entries.map((entry, idx) => {
                             const meta = RARITY_META[entry.rarity];
+                            const tier = inferItemTier(entry.tier, entry.id, entry.name);
+                            const resolvedAssetId =
+                              entry.kind === 'currency'
+                                ? resolveCurrencyIconId(
+                                    entry.id,
+                                    entry.name,
+                                    entry.iconId,
+                                    account.currencyIcons
+                                  )
+                                : entry.iconId;
                             return (
-                              <span
-                                key={`${entry.ts}-${entry.id}-${idx}`}
-                                className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-white/[0.035] py-1 pl-1.5 pr-2 text-xs text-zinc-200"
+                              <div
+                                key={`${entry.ts}-${entry.id}-${tier || ''}-${idx}`}
+                                title={`${entry.name}${tier ? ` [${tier}]` : ''} (${entry.rarity}) ${entry.kind === 'currency' || isStageRun ? '+' : '×'}${formatNumber(entry.qty)}`}
+                                className="inline-flex items-center gap-2 rounded-xl bg-[#101418] py-1.5 pl-1.5 pr-2.5 text-xs text-zinc-200"
                                 style={{
                                   boxShadow: `inset 0 0 0 1px ${meta.border}`,
                                 }}
                               >
-                                <RobloxAssetThumb
-                                  kind={entry.kind}
-                                  name={entry.name}
-                                  itemId={entry.id}
-                                  assetId={entry.iconId}
-                                  alt={entry.name}
-                                  className="w-4 h-4 rounded object-contain shrink-0"
-                                  fallback={
-                                    <span
-                                      className="size-2 rounded-full shrink-0"
-                                      style={{ backgroundColor: meta.hex }}
-                                    />
-                                  }
-                                />
-                                <span
-                                  className="max-w-[160px] truncate font-medium"
-                                  style={{ color: meta.text }}
+                                <div
+                                  className="w-8 h-8 rounded-lg shrink-0 overflow-hidden flex items-center justify-center"
+                                  style={{
+                                    backgroundColor: meta.softBg,
+                                    border: `1px solid ${meta.border}`,
+                                  }}
                                 >
-                                  {entry.name}
-                                </span>
-                                <span className="font-mono font-semibold tabular-nums text-white">
-                                  {entry.kind === 'currency' || isStageRun ? '+' : '×'}
-                                  {formatNumber(entry.qty)}
-                                </span>
-                              </span>
+                                  <RobloxAssetThumb
+                                    kind={entry.kind}
+                                    name={entry.name}
+                                    itemId={entry.id}
+                                    assetId={resolvedAssetId}
+                                    alt={entry.name}
+                                    className={
+                                      entry.kind === 'unit'
+                                        ? 'w-full h-full object-cover object-top'
+                                        : 'w-full h-full object-contain p-0.5'
+                                    }
+                                    fallback={
+                                      <ItemEmblem
+                                        kind={entry.kind}
+                                        rarity={entry.rarity}
+                                        name={entry.name}
+                                        size="sm"
+                                      />
+                                    }
+                                  />
+                                </div>
+                                <div className="min-w-0 leading-tight">
+                                  <div className="flex items-center gap-1.5">
+                                    <p
+                                      className="max-w-[140px] truncate text-xs font-semibold"
+                                      style={{ color: meta.text }}
+                                    >
+                                      {entry.name}
+                                    </p>
+                                    {tier && (
+                                      <span className="shrink-0 rounded bg-cyan-400/15 border border-cyan-400/35 px-1.5 py-px text-[9px] font-mono font-bold text-cyan-200">
+                                        {tier}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="mt-0.5 font-mono text-[11px] font-bold tabular-nums text-[#10F5A0]">
+                                    {entry.kind === 'currency' || isStageRun ? '+' : '×'}
+                                    {formatNumber(entry.qty)}
+                                  </p>
+                                </div>
+                              </div>
                             );
                           })}
                         </div>
@@ -1427,11 +1639,16 @@ export function AccountDashboard({
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
-                  {sortedTotals.map((t) => {
+                  {sortedTotals.map((t, idx) => {
                     const meta = RARITY_META[t.rarity];
+                    const tier = inferItemTier(t.tier, t.id, t.name);
+                    const resolvedAssetId =
+                      t.kind === 'currency'
+                        ? resolveCurrencyIconId(t.id, t.name, t.iconId, account.currencyIcons)
+                        : t.iconId;
                     return (
                       <div
-                        key={`${t.kind}|${t.id}`}
+                        key={`${t.kind}|${t.id}|${tier || ''}|${idx}`}
                         className="flex items-center justify-between gap-3 rounded-2xl bg-[#101418] p-3 transition-colors hover:bg-[#14191E]"
                         style={{
                           boxShadow: `inset 0 0 0 1px ${meta.border}`,
@@ -1449,7 +1666,7 @@ export function AccountDashboard({
                               kind={t.kind}
                               name={t.name}
                               itemId={t.id}
-                              assetId={t.iconId}
+                              assetId={resolvedAssetId}
                               alt={t.name}
                               className={
                                 t.kind === 'unit'
@@ -1467,12 +1684,19 @@ export function AccountDashboard({
                             />
                           </div>
                           <div className="min-w-0">
-                            <p
-                              className="text-sm font-semibold truncate"
-                              style={{ color: meta.text }}
-                            >
-                              {t.name}
-                            </p>
+                            <div className="flex items-center gap-1.5">
+                              <p
+                                className="text-sm font-semibold truncate"
+                                style={{ color: meta.text }}
+                              >
+                                {t.name}
+                              </p>
+                              {tier && (
+                                <span className="shrink-0 rounded bg-cyan-400/15 border border-cyan-400/35 px-1.5 py-px text-[10px] font-mono font-bold text-cyan-200">
+                                  {tier}
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[11px] text-zinc-500">
                               {t.rarity} ·{' '}
                               {t.kind === 'unit'
@@ -1685,86 +1909,203 @@ export function AccountDashboard({
                   </button>
                 </div>
               ) : invView === 'grid' ? (
-                /* RollinShop-Style Visual Inventory Card Grid */
-                <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
-                  {filteredInventory.map((it) => {
-                    const meta = RARITY_META[it.rarity];
-                    return (
-                      <div
-                        key={`${it.kind}-${it.id}`}
-                        className="relative flex flex-col justify-between rounded-2xl bg-[#101418] p-3 transition-colors hover:bg-[#141A20]"
-                        style={{
-                          boxShadow: `inset 0 0 0 1px ${meta.border}`,
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div
-                            className="w-10 h-10 rounded-lg shrink-0 overflow-hidden flex items-center justify-center"
-                            style={{
-                              backgroundColor: meta.softBg,
-                              border: `1px solid ${meta.border}`,
-                            }}
-                          >
-                            <RobloxAssetThumb
-                              kind={it.kind === 'unit' ? 'unit' : 'item'}
-                              name={it.name}
-                              itemId={it.id}
-                              assetId={it.iconId}
-                              alt={it.name}
-                              className={
-                                it.kind === 'unit'
-                                  ? 'w-full h-full object-cover object-top'
-                                  : 'w-full h-full object-contain p-0.5'
-                              }
-                              fallback={
-                                <ItemEmblem
-                                  kind={it.kind === 'unit' ? 'unit' : 'item'}
-                                  group={it.group}
-                                  rarity={it.rarity}
-                                  name={it.name}
-                                  size="md"
-                                />
-                              }
-                            />
+                invGroup === 'ALL' &&
+                (separatedBagSections.portals.length > 0 ||
+                  separatedBagSections.charms.length > 0) ? (
+                  <div className="space-y-5">
+                    {[
+                      {
+                        key: 'portals',
+                        title: 'Portals',
+                        accent: 'text-cyan-300',
+                        items: separatedBagSections.portals,
+                      },
+                      {
+                        key: 'charms',
+                        title: 'Charms',
+                        accent: 'text-amber-300',
+                        items: separatedBagSections.charms,
+                      },
+                      {
+                        key: 'others',
+                        title: 'ไอเทมอื่นๆ และยูนิต',
+                        accent: 'text-zinc-300',
+                        items: separatedBagSections.others,
+                      },
+                    ]
+                      .filter((sec) => sec.items.length > 0)
+                      .map((sec) => (
+                        <div key={sec.key}>
+                          <div className="mb-2.5 flex items-center justify-between gap-2">
+                            <h3 className={`text-xs font-bold tracking-wide ${sec.accent}`}>
+                              {sec.title}
+                            </h3>
+                            <span className="text-[11px] font-mono tabular-nums text-zinc-500">
+                              {sec.items.length} รายการ · รวม{' '}
+                              {formatNumber(sec.items.reduce((s, x) => s + x.qty, 0))} ชิ้น
+                            </span>
                           </div>
-                          <span className="rounded-lg bg-black/55 px-2 py-0.5 font-mono text-xs font-bold tabular-nums text-[#10F5A0]">
-                            ×{formatNumber(it.qty)}
-                          </span>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
+                            {sec.items.map((it, idx) => {
+                              const meta = RARITY_META[it.rarity];
+                              return (
+                                <div
+                                  key={`${it.kind}-${it.id}-${it.tier || ''}-${idx}`}
+                                  className="relative flex flex-col justify-between rounded-2xl bg-[#101418] p-3 transition-colors hover:bg-[#141A20]"
+                                  style={{
+                                    boxShadow: `inset 0 0 0 1px ${meta.border}`,
+                                  }}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div
+                                      className="w-10 h-10 rounded-lg shrink-0 overflow-hidden flex items-center justify-center"
+                                      style={{
+                                        backgroundColor: meta.softBg,
+                                        border: `1px solid ${meta.border}`,
+                                      }}
+                                    >
+                                      <RobloxAssetThumb
+                                        kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                        name={it.name}
+                                        itemId={it.id}
+                                        assetId={it.iconId}
+                                        alt={it.name}
+                                        className={
+                                          it.kind === 'unit'
+                                            ? 'w-full h-full object-cover object-top'
+                                            : 'w-full h-full object-contain p-0.5'
+                                        }
+                                        fallback={
+                                          <ItemEmblem
+                                            kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                            group={it.group}
+                                            rarity={it.rarity}
+                                            name={it.name}
+                                            size="md"
+                                          />
+                                        }
+                                      />
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1">
+                                      <span className="rounded-lg bg-black/55 px-2 py-0.5 font-mono text-xs font-bold tabular-nums text-[#10F5A0]">
+                                        ×{formatNumber(it.qty)}
+                                      </span>
+                                      {it.tier && (
+                                        <span className="rounded-md bg-cyan-400/15 border border-cyan-400/35 px-1.5 py-px font-mono text-[10px] font-bold text-cyan-200">
+                                          {it.tier}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="mt-2.5 min-w-0">
+                                    <p
+                                      className="text-xs font-semibold leading-snug line-clamp-2"
+                                      style={{ color: meta.text }}
+                                      title={it.tier ? `${it.name} (${it.tier})` : it.name}
+                                    >
+                                      {it.name}
+                                    </p>
+                                    <p className="mt-1 text-[10px] text-zinc-500 truncate">
+                                      {it.group} · {it.rarity}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                        <div className="mt-2.5 min-w-0">
-                          <p
-                            className="text-xs font-semibold leading-snug line-clamp-2"
-                            style={{ color: meta.text }}
-                            title={it.name}
-                          >
-                            {it.name}
-                          </p>
-                          <p className="mt-1 text-[10px] text-zinc-500 truncate">
-                            {it.group} · {it.rarity}
-                          </p>
+                      ))}
+                  </div>
+                ) : (
+                  /* Single-group Visual Inventory Card Grid */
+                  <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
+                    {filteredInventory.map((it, idx) => {
+                      const meta = RARITY_META[it.rarity];
+                      return (
+                        <div
+                          key={`${it.kind}-${it.id}-${it.tier || ''}-${idx}`}
+                          className="relative flex flex-col justify-between rounded-2xl bg-[#101418] p-3 transition-colors hover:bg-[#141A20]"
+                          style={{
+                            boxShadow: `inset 0 0 0 1px ${meta.border}`,
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div
+                              className="w-10 h-10 rounded-lg shrink-0 overflow-hidden flex items-center justify-center"
+                              style={{
+                                backgroundColor: meta.softBg,
+                                border: `1px solid ${meta.border}`,
+                              }}
+                            >
+                              <RobloxAssetThumb
+                                kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                name={it.name}
+                                itemId={it.id}
+                                assetId={it.iconId}
+                                alt={it.name}
+                                className={
+                                  it.kind === 'unit'
+                                    ? 'w-full h-full object-cover object-top'
+                                    : 'w-full h-full object-contain p-0.5'
+                                }
+                                fallback={
+                                  <ItemEmblem
+                                    kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                    group={it.group}
+                                    rarity={it.rarity}
+                                    name={it.name}
+                                    size="md"
+                                  />
+                                }
+                              />
+                            </div>
+                            <div className="flex flex-col items-end gap-1">
+                              <span className="rounded-lg bg-black/55 px-2 py-0.5 font-mono text-xs font-bold tabular-nums text-[#10F5A0]">
+                                ×{formatNumber(it.qty)}
+                              </span>
+                              {it.tier && (
+                                <span className="rounded-md bg-cyan-400/15 border border-cyan-400/35 px-1.5 py-px font-mono text-[10px] font-bold text-cyan-200">
+                                  {it.tier}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="mt-2.5 min-w-0">
+                            <p
+                              className="text-xs font-semibold leading-snug line-clamp-2"
+                              style={{ color: meta.text }}
+                              title={it.tier ? `${it.name} (${it.tier})` : it.name}
+                            >
+                              {it.name}
+                            </p>
+                            <p className="mt-1 text-[10px] text-zinc-500 truncate">
+                              {it.group} · {it.rarity}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )
               ) : (
-                /* High-Density Table View */
+                /* High-Density Table View with Tier column */
                 <div className="overflow-x-auto -mx-4 sm:-mx-5">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-white/[0.08] text-xs font-medium text-zinc-400">
                         <th className="py-2.5 pl-5 pr-3">ไอเทม</th>
+                        <th className="py-2.5 px-3">Tier</th>
                         <th className="py-2.5 px-3">หมวดหมู่</th>
                         <th className="py-2.5 px-3">ระดับ</th>
                         <th className="py-2.5 pl-3 pr-5 text-right">จำนวน</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/[0.06] text-xs">
-                      {filteredInventory.map((it) => {
+                      {filteredInventory.map((it, idx) => {
                         const meta = RARITY_META[it.rarity];
                         return (
                           <tr
-                            key={`${it.kind}-${it.id}`}
+                            key={`${it.kind}-${it.id}-${it.tier || ''}-${idx}`}
                             className="hover:bg-white/[0.025] transition-colors"
                           >
                             <td className="py-2.5 pl-5 pr-3">
@@ -1810,6 +2151,15 @@ export function AccountDashboard({
                                   </p>
                                 </div>
                               </div>
+                            </td>
+                            <td className="py-2.5 px-3 whitespace-nowrap">
+                              {it.tier ? (
+                                <span className="rounded-md bg-cyan-400/15 border border-cyan-400/35 px-1.5 py-0.5 font-mono text-[10px] font-bold text-cyan-200">
+                                  {it.tier}
+                                </span>
+                              ) : (
+                                <span className="text-zinc-600">-</span>
+                              )}
                             </td>
                             <td className="py-2.5 px-3 text-zinc-300 whitespace-nowrap">
                               {it.group}

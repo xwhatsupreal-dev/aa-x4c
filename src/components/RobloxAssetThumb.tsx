@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 export type AaThumbKind = 'stage' | 'unit' | 'item' | 'currency';
 
@@ -31,7 +31,7 @@ export function RobloxAssetThumb({
   const cleanWorld = world?.trim() || '';
   const cleanMap = map?.trim() || '';
 
-  let src = '';
+  let baseSrc = '';
   if (kind && (cleanName || cleanItemId || cleanWorld || cleanMap || cleanId)) {
     const params = new URLSearchParams();
     params.set('kind', kind);
@@ -40,12 +40,29 @@ export function RobloxAssetThumb({
     if (cleanWorld) params.set('world', cleanWorld);
     if (cleanMap) params.set('map', cleanMap);
     if (cleanId) params.set('assetId', cleanId);
-    src = `/api/aa-image?${params.toString()}`;
+    baseSrc = `/api/aa-image?${params.toString()}`;
   } else if (cleanId) {
-    src = `/api/asset-image?id=${encodeURIComponent(cleanId)}`;
+    baseSrc = `/api/asset-image?id=${encodeURIComponent(cleanId)}`;
   }
 
+  const [retryCount, setRetryCount] = useState(0);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRetryCount(0);
+    setFailedSrc(null);
+  }, [baseSrc]);
+
+  const src = baseSrc ? (retryCount > 0 ? `${baseSrc}&_r=${retryCount}` : baseSrc) : '';
+
+  useEffect(() => {
+    if (!src || failedSrc !== src || !cleanId || retryCount >= 2) return;
+    const timer = window.setTimeout(() => {
+      setRetryCount((c) => c + 1);
+      setFailedSrc(null);
+    }, retryCount === 0 ? 4000 : 12000);
+    return () => window.clearTimeout(timer);
+  }, [src, failedSrc, cleanId, retryCount]);
 
   if (!src || failedSrc === src) {
     return <>{fallback}</>;

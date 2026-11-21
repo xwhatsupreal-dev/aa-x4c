@@ -239,13 +239,17 @@ const CURRENCY_FILE_MAP: Record<string, string[]> = {
   gems: ['File:Gems.png'],
   gem: ['File:Gems.png'],
   first_clear_gems: ['File:Gems.png'],
+  summer_pearls: ['File:Summer Pearls.png', 'File:Summer Pearl.png', 'File:Pearls.png', 'File:Pearl.png'],
+  summerpearls: ['File:Summer Pearls.png', 'File:Summer Pearl.png', 'File:Pearls.png', 'File:Pearl.png'],
+  'summer pearls': ['File:Summer Pearls.png', 'File:Summer Pearl.png', 'File:Pearls.png', 'File:Pearl.png'],
+  pearls: ['File:Summer Pearls.png', 'File:Pearls.png', 'File:Pearl.png'],
   trophies: ['File:Trophies.png'],
   trophy: ['File:Trophies.png'],
   trait_tokens: ['File:Star Remnant.png', 'File:Remnant.png'],
   trait_reroll: ['File:Star Remnant.png', 'File:Remnant.png'],
   curse_tokens: ['File:Cursed Womb.png', 'File:Curse Token.png'],
   rebirth_tokens: ['File:Rebirth Token.png'],
-  resource: ['File:Holiday Stars.png', 'File:Candies.png', 'File:Pearls.png'],
+  resource: ['File:Summer Pearls.png', 'File:Pearls.png', 'File:Holiday Stars.png', 'File:Candies.png'],
 };
 
 export async function resolveAaImageUrl(query: AaImageQuery): Promise<string | null> {
@@ -286,15 +290,17 @@ export async function resolveAaImageUrl(query: AaImageQuery): Promise<string | n
       const preset =
         CURRENCY_FILE_MAP[lowerId] ||
         CURRENCY_FILE_MAP[lowerName] ||
-        (lowerName.includes('gem')
-          ? ['File:Gems.png']
-          : lowerName.includes('gold')
-            ? ['File:Gold.png']
-            : lowerName.includes('trophy')
-              ? ['File:Trophies.png']
-              : lowerName.includes('trait') || lowerName.includes('remnant')
-                ? ['File:Star Remnant.png']
-                : []);
+        (lowerName.includes('pearl') || lowerId.includes('pearl')
+          ? ['File:Summer Pearls.png', 'File:Summer Pearl.png', 'File:Pearls.png', 'File:Pearl.png']
+          : lowerName.includes('gem')
+            ? ['File:Gems.png']
+            : lowerName.includes('gold')
+              ? ['File:Gold.png']
+              : lowerName.includes('trophy')
+                ? ['File:Trophies.png']
+                : lowerName.includes('trait') || lowerName.includes('remnant')
+                  ? ['File:Star Remnant.png']
+                  : []);
       const candidates = uniqueList([
         ...preset,
         ...(name ? [`File:${name}.png`] : []),
@@ -311,7 +317,7 @@ export async function resolveAaImageUrl(query: AaImageQuery): Promise<string | n
         [/clover/i, ['File:Map - Clover Kingdom.png']],
         [/sand[\s_-]*village|hidden[\s_-]*sand/i, ['File:Map - Hidden Sand Village.png']],
         [/hollow[\s_-]*invasion/i, ['File:Map - Hollow Invasion.png']],
-        [/hollow/i, ['File:Map - Hollow World.png']],
+        [/hollow|hueco/i, ['File:Map - Hollow World.png', 'File:Map - Hollow Invasion.png']],
         [/hero[\s_-]*city|midnight/i, ['File:Map - Hero City.png']],
         [/ghoul/i, ['File:Map - Ghoul City.png']],
         [/snowy/i, ['File:Map - Snowy Town.png']],
@@ -319,7 +325,7 @@ export async function resolveAaImageUrl(query: AaImageQuery): Promise<string | n
         [/ant[\s_-]*kingdom/i, ['File:Map - Ant Kingdom.png']],
         [/alien|spaceship/i, ['File:Map - Alien Spaceship.png']],
         [/puppet|dressrosa/i, ['File:Map - Puppet Island.png']],
-        [/virtual|dungeon/i, ['File:Map - Virtual Dungeon.png']],
+        [/virtual|dungeon|sao|aincrad/i, ['File:Map - Virtual Dungeon.png']],
         [/windhym/i, ['File:Map - Windhym.png']],
         [/fabled/i, ['File:Map - Fabled Kingdom.png']],
         [/cursed[\s_-]*academy|jujutsu/i, ['File:Map - Cursed Academy.png']],

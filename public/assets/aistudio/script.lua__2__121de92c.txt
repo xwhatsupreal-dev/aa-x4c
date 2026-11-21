@@ -1,0 +1,764 @@
+-- ============================================================
+-- 2K | Anime Adventures v7.3
+-- แก้: WrapText -> TextWrapped (property ที่ถูกต้องของ TextLabel)
+-- ============================================================
+if getgenv().TwoK then pcall(function() getgenv().TwoK.Stop() end) end
+
+local H = { Running = true, Conns = {}, Rewards = {}, Team = {}, Seen = {},
+	Flags = { Notify = true }, LevelName = "?", MapImg = nil }
+getgenv().TwoK = H
+
+local Players      = game:GetService("Players")
+local RS           = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local LP           = Players.LocalPlayer
+local PG           = LP:WaitForChild("PlayerGui")
+
+local function conn(c) if c then H.Conns[#H.Conns + 1] = c end end
+local function idx(root, path)
+	if not root then return nil end
+	local cur = root
+	for part in string.gmatch(path, "[^%.]+") do
+		if not cur then return nil end
+		cur = cur:FindFirstChild(part)
+	end
+	return cur
+end
+local function stamp()
+	local ok, s = pcall(os.date, "%H:%M:%S")
+	return (ok and s) or "--:--:--"
+end
+local function fmt(n)
+	n = tonumber(n) or 0
+	if n >= 1e9 then return string.format("%.2fB", n / 1e9) end
+	if n >= 1e7 then return string.format("%.1fM", n / 1e6) end
+	local s = tostring(math.floor(n))
+	local k
+	repeat s, k = s:gsub("^(-?%d+)(%d%d%d)", "%1,%2") until k == 0
+	return s
+end
+
+------------------------------------------------------------------
+-- DATA
+------------------------------------------------------------------
+local DataFolder = idx(RS, "src.Data")
+local function req(n)
+	local m = DataFolder and DataFolder:FindFirstChild(n)
+	if not m then return {} end
+	local ok, r = pcall(require, m)
+	if ok and type(r) == "table" then return r end
+	return {}
+end
+local Items, Units, Maps = req("Items"), req("Units"), req("Maps")
+
+local Assets = idx(RS, "packages.assets")
+local MapIcons = Assets and Assets:FindFirstChild("MapIcons")
+local GuiAs = Assets and Assets:FindFirstChild("gui")
+local OverrideIcons = GuiAs and GuiAs:FindFirstChild("_OverrideItemIcons")
+
+local RCOL = {
+	Common = Color3.fromRGB(160,160,172), Uncommon = Color3.fromRGB(110,200,120),
+	Rare = Color3.fromRGB(90,160,255), Epic = Color3.fromRGB(180,110,255),
+	Legendary = Color3.fromRGB(255,190,80), Mythic = Color3.fromRGB(255,120,90),
+	Secret = Color3.fromRGB(255,100,165), Exclusive = Color3.fromRGB(130,220,235),
+}
+local function rcol(r) return RCOL[tostring(r)] or Color3.fromRGB(150,150,165) end
+
+local function itemImg(id)
+	if not id then return nil end
+	if OverrideIcons then
+		local l = OverrideIcons:FindFirstChild(tostring(id))
+		if l then
+			for _, x in ipairs(l:GetDescendants()) do
+				if (x:IsA("ImageLabel") or x:IsA("ImageButton")) and x.Image ~= "" then return x.Image end
+			end
+		end
+	end
+	local d = Items[id]
+	if type(d) == "table" then
+		for _, k in ipairs({ "icon", "image", "_icon", "_resource_icon" }) do
+			local v = d[k]
+			if type(v) == "string" and v ~= "" then return v end
+		end
+	end
+	return nil
+end
+
+local function mapImage(mapId, world)
+	if not MapIcons then return nil end
+	for _, key in ipairs({ mapId, world }) do
+		if key then
+			local f = MapIcons:FindFirstChild(tostring(key))
+			if f then
+				for _, d in ipairs(f:GetDescendants()) do
+					if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" then return d.Image end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+------------------------------------------------------------------
+-- PROFILE
+------------------------------------------------------------------
+local function profile()
+	if H.P then return H.P end
+	for _, o in ipairs(getgc(true)) do
+		if type(o) == "table" and type(rawget(o, "inventory")) == "table"
+			and type(rawget(o, "level_data")) == "table" then
+			H.P = o
+			return o
+		end
+	end
+	return nil
+end
+
+------------------------------------------------------------------
+-- CURRENCY READERS
+------------------------------------------------------------------
+local function readStats()
+	local s = LP:FindFirstChild("_stats")
+	if not s then return nil end
+	local t = { _res = {} }
+	for _, c in ipairs(s:GetChildren()) do
+		if c:IsA("NumberValue") or c:IsA("IntValue") then
+			local v = c.Value
+			local nm = c.Name
+			local low = nm:lower()
+			if low:sub(1, 9) == "_resource" then
+				t._res[nm:sub(10)] = v
+			elseif low:find("gold") then t.gold = v
+			elseif low:find("gem") then t.gem = v
+			elseif low:find("xp") then t.xp = v
+			elseif low:find("troph") then t.trophy = v
+			elseif low:find("token") then t[nm] = v
+			end
+		end
+	end
+	return t
+end
+
+local function readRes()
+	local p = profile()
+	local r = p and rawget(p, "resources")
+	if type(r) ~= "table" then return {} end
+	local out = {}
+	for k, v in pairs(r) do
+		if type(v) == "number" then out[tostring(k)] = v end
+	end
+	return out
+end
+
+local function snapshot()
+	local st = readStats() or {}
+	local tokens = {}
+	for k, v in pairs(st) do
+		if type(k) == "string" and k:lower():find("token") then tokens[k] = v end
+	end
+	local res = {}
+	for k, v in pairs(st._res or {}) do res[k] = v end
+	for k, v in pairs(readRes()) do res[k] = (res[k] or 0) + v end
+	return {
+		gold = st.gold or 0, gem = st.gem or 0, xp = st.xp or 0,
+		trophy = st.trophy or 0, tokens = tokens, res = res,
+	}
+end
+H.LastSnap = snapshot()
+
+------------------------------------------------------------------
+-- REWARD PUSH / DIFF
+------------------------------------------------------------------
+local function push(label, amount, kind, rar, imgId)
+	if not amount or amount == 0 then return end
+	local key = kind .. "|" .. tostring(label) .. "|" .. tostring(math.floor(amount * 100)) .. "|" .. stamp()
+	if H.Seen[key] then return end
+	H.Seen[key] = true
+	local e = { kind = kind, label = tostring(label), amount = amount, time = stamp(), rarity = rar, img = imgId }
+	table.insert(H.Rewards, 1, e)
+	if #H.Rewards > 120 then table.remove(H.Rewards) end
+	if H.Flags.Notify and H.NotifyCard then H.NotifyCard(e) end
+	if H.RefreshLog then H.RefreshLog() end
+end
+
+local function diff()
+	local now = snapshot()
+	local old = H.LastSnap or now
+	if now.gold   > old.gold   then push("Gold",   now.gold   - old.gold,   "cash", "Legendary", "rbxassetid://100751534594369") end
+	if now.gem    > old.gem    then push("Gems",   now.gem    - old.gem,    "cash", "Rare",      "rbxassetid://71405874061254") end
+	if now.xp     > old.xp     then push("XP",     now.xp     - old.xp,     "cash", "Uncommon",  nil) end
+	if now.trophy > old.trophy then push("Trophy", now.trophy - old.trophy, "cash", "Epic",      nil) end
+	for k, v in pairs(now.tokens) do
+		local ov = old.tokens[k] or 0
+		if v > ov then push(k, v - ov, "token", "Epic", itemImg(k)) end
+	end
+	for k, v in pairs(now.res) do
+		local ov = old.res[k] or 0
+		if v > ov then push(k, v - ov, "event", "Mythic", itemImg(k)) end
+	end
+	H.LastSnap = now
+	if H.RefreshMoney then H.RefreshMoney() end
+end
+
+------------------------------------------------------------------
+-- REMOTE HOOKS
+------------------------------------------------------------------
+local function hookRemotes()
+	local ep = RS:FindFirstChild("endpoints")
+	local s2c = ep and ep:FindFirstChild("server_to_client")
+	if not s2c then return end
+
+	local r1 = s2c:FindFirstChild("unit_killed_resource_reward")
+	if r1 then
+		conn(r1.OnClientEvent:Connect(function(...)
+			local a, b = ...
+			if type(a) == "string" and type(b) == "number" then
+				push(a, b, "event", "Mythic", itemImg(a))
+			elseif type(a) == "table" then
+				local id = a.item_id or a.resource_id or a.id or a.name or a.resource
+				local amt = a.amount or a.value or a.quantity or a.reward
+				if type(id) == "string" and type(amt) == "number" then
+					push(id, amt, "event", "Mythic", itemImg(id))
+				end
+			end
+		end))
+	end
+
+	local r2 = s2c:FindFirstChild("show_drop_message")
+	if r2 then
+		conn(r2.OnClientEvent:Connect(function(a)
+			if type(a) == "table" then
+				local id = a.item_id or a.id or a.name
+				local amt = a.amount or a.quantity or 1
+				if type(id) == "string" then
+					local def = Items[id]
+					push((type(def) == "table" and def.name) or id, tonumber(amt) or 1, "item",
+						(type(def) == "table" and def.rarity) or "Rare", itemImg(id))
+				end
+			end
+		end))
+	end
+
+	local r3 = s2c:FindFirstChild("show_unit_and_item_rewards")
+	if r3 then
+		conn(r3.OnClientEvent:Connect(function(t)
+			if type(t) ~= "table" then return end
+			for _, list in ipairs({ "units", "items" }) do
+				local L = t[list]
+				if type(L) == "table" then
+					for _, e in pairs(L) do
+						local id = (type(e) == "table" and (e.id or e.unit_id or e.item_id)) or e
+						if type(id) == "string" then
+							local isU = (list == "units")
+							local d = isU and Units[id] or Items[id]
+							push((type(d) == "table" and d.name) or id, 1,
+								isU and "unit" or "item",
+								(type(d) == "table" and d.rarity) or "Rare", itemImg(id))
+						end
+					end
+				end
+			end
+		end))
+	end
+
+	local gf = s2c:FindFirstChild("game_finished")
+	if gf then
+		conn(gf.OnClientEvent:Connect(function()
+			task.delay(1.5, diff); task.delay(3.5, diff); task.delay(6, diff)
+		end))
+	end
+end
+hookRemotes()
+task.spawn(function()
+	while H.Running do
+		task.wait(2)
+		pcall(diff)
+	end
+end)
+
+------------------------------------------------------------------
+-- LEVEL
+------------------------------------------------------------------
+local function readModifiers()
+	local out = {}
+	local ir = idx(PG, "GameLevelInfo.List_rg.inner.scroll.Buffs")
+	if ir then
+		for _, c in ipairs(ir:GetChildren()) do
+			if c:IsA("TextLabel") and c.Text ~= "" and c.Name ~= "InfoReward_title" then
+				table.insert(out, c.Text)
+			end
+		end
+	end
+	return out
+end
+
+local function readLevel()
+	local n = idx(PG, "Waves.HealthBar.LevelName")
+	local mapName = (n and n.Text ~= "" and n.Text) or nil
+	if not mapName then
+		local gl = PG:FindFirstChild("GameLevelInfo")
+		local t = gl and gl:FindFirstChild("Title", true)
+		mapName = t and t.Text
+	end
+	local mapId = nil
+	for id, d in pairs(Maps) do
+		if type(d) == "table" then
+			local dn = tostring(d.name or ""):lower()
+			if mapName and mapName ~= "" and dn ~= ""
+				and (dn == mapName:lower() or mapName:lower():find(dn, 1, true)) then
+				mapId = id
+				break
+			end
+		end
+	end
+	local inLobby = LP:FindFirstChild("InLobby")
+	local isLobby = (inLobby and inLobby.Value == true) or (mapName == nil)
+	return {
+		name = mapName or (isLobby and "Lobby" or "?"),
+		id = mapId or mapName,
+		img = mapImage(mapId or mapName, mapName),
+		lobby = isLobby,
+		modifiers = readModifiers(),
+	}
+end
+
+------------------------------------------------------------------
+-- TEAM
+------------------------------------------------------------------
+local function teamSlots()
+	local out = {}
+	local tu = PG:FindFirstChild("PlayerTeam")
+	local root = tu and (tu:FindFirstChild("Units") or tu:FindFirstChild("Team") or tu)
+	if not root then return out end
+	local i = 0
+	for _, c in ipairs(root:GetDescendants()) do
+		if c:IsA("ImageLabel") or c:IsA("ImageButton") then
+			if c.Name:find("Unit") or c.Name:find("Slot") or c:FindFirstChild("UnitName", true) then
+				i = i + 1
+				if i > 6 then break end
+				local lbl = c:FindFirstChild("Name", true) or c:FindFirstChild("UnitName", true)
+				out[i] = {
+					idx = i,
+					name = (lbl and lbl.Text) or "?",
+					img = (c.Image ~= "" and c.Image) or nil,
+				}
+			end
+		end
+	end
+	return out
+end
+
+local function refreshTeam()
+	local p = profile()
+	local col = p and rawget(p, "collection")
+	local eq = col and rawget(col, "equipped_units")
+	local slots = teamSlots()
+	if type(eq) == "table" then
+		local list = {}
+		for _, v in pairs(eq) do
+			if type(v) == "table" and type(v.id) == "string" then
+				table.insert(list, v.id)
+			elseif type(v) == "string" then
+				table.insert(list, v)
+			end
+		end
+		table.sort(list)
+		for i = 1, math.min(6, #list) do
+			local id = list[i]
+			local prev = slots[i] or { idx = i }
+			local ud = Units[id]
+			slots[i] = {
+				idx = i,
+				name = (type(ud) == "table" and ud.name) or prev.name or id,
+				img = prev.img,
+				rarity = type(ud) == "table" and ud.rarity or nil,
+			}
+		end
+	end
+	H.Team = slots
+end
+
+------------------------------------------------------------------
+-- GUI
+------------------------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "TwoKHub"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = PG
+
+local main = Instance.new("Frame")
+main.Size = UDim2.fromOffset(520, 380)
+main.Position = UDim2.new(0, 30, 0, 90)
+main.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = Color3.fromRGB(80, 140, 255)
+stroke.Thickness = 1.5
+
+local bar = Instance.new("Frame", main)
+bar.Size = UDim2.new(1, 0, 0, 38)
+bar.BackgroundColor3 = Color3.fromRGB(26, 26, 36)
+bar.BorderSizePixel = 0
+Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 12)
+
+local title = Instance.new("TextLabel", bar)
+title.BackgroundTransparency = 1
+title.Size = UDim2.new(1, -120, 1, 0)
+title.Position = UDim2.fromOffset(12, 0)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 15
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.TextColor3 = Color3.fromRGB(235, 235, 245)
+title.Text = "2K | Anime Adventures"
+
+local close = Instance.new("TextButton", bar)
+close.Size = UDim2.fromOffset(28, 28)
+close.Position = UDim2.new(1, -36, 0, 5)
+close.BackgroundColor3 = Color3.fromRGB(200, 70, 80)
+close.Text = "X"
+close.Font = Enum.Font.GothamBold
+close.TextColor3 = Color3.new(1, 1, 1)
+Instance.new("UICorner", close).CornerRadius = UDim.new(0, 8)
+close.MouseButton1Click:Connect(function() gui.Enabled = not gui.Enabled end)
+
+-- แถบเงินเลื่อนแนวนอน
+local moneyBar = Instance.new("Frame", main)
+moneyBar.Size = UDim2.new(1, -20, 0, 44)
+moneyBar.Position = UDim2.fromOffset(10, 44)
+moneyBar.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+moneyBar.BorderSizePixel = 0
+Instance.new("UICorner", moneyBar).CornerRadius = UDim.new(0, 10)
+
+local mScroll = Instance.new("ScrollingFrame", moneyBar)
+mScroll.Size = UDim2.new(1, -12, 1, -8)
+mScroll.Position = UDim2.fromOffset(6, 4)
+mScroll.BackgroundTransparency = 1
+mScroll.ScrollBarThickness = 0
+mScroll.ScrollingDirection = Enum.ScrollingDirection.X
+mScroll.AutomaticCanvasSize = Enum.AutomaticSize.X
+mScroll.CanvasSize = UDim2.new()
+
+-- *** ห้ามขึ้นบรรทัดใหม่หลังจุด ***
+local mLayout = Instance.new("UIListLayout", mScroll)
+mLayout.FillDirection = Enum.FillDirection.Horizontal
+mLayout.Padding = UDim.new(0, 8)
+
+local function moneyChip(name, value, imgId)
+	local f = Instance.new("Frame", mScroll)
+	f.Size = UDim2.fromOffset(112, 30)
+	f.BackgroundColor3 = Color3.fromRGB(34, 34, 46)
+	f.BorderSizePixel = 0
+	Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+	if imgId then
+		local im = Instance.new("ImageLabel", f)
+		im.Size = UDim2.fromOffset(22, 22)
+		im.Position = UDim2.fromOffset(6, 4)
+		im.BackgroundTransparency = 1
+		im.Image = imgId
+	end
+	local l = Instance.new("TextLabel", f)
+	l.BackgroundTransparency = 1
+	l.Size = UDim2.new(1, -34, 1, 0)
+	l.Position = UDim2.fromOffset(30, 0)
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Font = Enum.Font.GothamBold
+	l.TextSize = 12
+	l.TextColor3 = Color3.fromRGB(240, 240, 250)
+	l.TextTruncate = Enum.TextTruncate.AtEnd
+	l.Text = ("%s %s"):format(name, fmt(value))
+	return f
+end
+
+H.RefreshMoney = function()
+	for _, c in ipairs(mScroll:GetChildren()) do
+		if c:IsA("Frame") then c:Destroy() end
+	end
+	local s = H.LastSnap or snapshot()
+	moneyChip("Gold", s.gold, "rbxassetid://100751534594369")
+	moneyChip("Gems", s.gem, "rbxassetid://71405874061254")
+	moneyChip("XP", s.xp)
+	moneyChip("Trophy", s.trophy)
+	for k, v in pairs(s.res or {}) do moneyChip(k, v, itemImg(k)) end
+	for k, v in pairs(s.tokens or {}) do moneyChip(k, v, itemImg(k)) end
+end
+H.RefreshMoney()
+
+local body = Instance.new("Frame", main)
+body.Size = UDim2.new(1, -20, 1, -142)
+body.Position = UDim2.fromOffset(10, 94)
+body.BackgroundTransparency = 1
+
+local function panel(x, w, heading)
+	local p = Instance.new("Frame", body)
+	p.Position = UDim2.new(0, x, 0, 0)
+	p.Size = UDim2.new(0, w, 1, 0)
+	p.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+	p.BorderSizePixel = 0
+	Instance.new("UICorner", p).CornerRadius = UDim.new(0, 10)
+	local h = Instance.new("TextLabel", p)
+	h.BackgroundTransparency = 1
+	h.Size = UDim2.new(1, -12, 0, 24)
+	h.Position = UDim2.fromOffset(6, 4)
+	h.Font = Enum.Font.GothamBold
+	h.TextSize = 13
+	h.TextXAlignment = Enum.TextXAlignment.Left
+	h.TextColor3 = Color3.fromRGB(120, 180, 255)
+	h.Text = heading
+	return p
+end
+
+-- (A) ด่านปัจจุบัน
+local levelPanel = panel(0, 168, "ด่านปัจจุบัน")
+local mapThumb = Instance.new("ImageLabel", levelPanel)
+mapThumb.Size = UDim2.new(1, -16, 0, 78)
+mapThumb.Position = UDim2.fromOffset(8, 32)
+mapThumb.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
+mapThumb.Image = ""
+mapThumb.ScaleType = Enum.ScaleType.Crop
+Instance.new("UICorner", mapThumb).CornerRadius = UDim.new(0, 8)
+
+local mapNameLbl = Instance.new("TextLabel", levelPanel)
+mapNameLbl.BackgroundTransparency = 1
+mapNameLbl.Size = UDim2.new(1, -16, 0, 40)
+mapNameLbl.Position = UDim2.fromOffset(8, 114)
+mapNameLbl.TextWrapped = true          -- แก้จาก WrapText
+mapNameLbl.TextXAlignment = Enum.TextXAlignment.Left
+mapNameLbl.TextYAlignment = Enum.TextYAlignment.Top
+mapNameLbl.Font = Enum.Font.GothamBold
+mapNameLbl.TextSize = 12
+mapNameLbl.TextColor3 = Color3.fromRGB(235, 235, 245)
+mapNameLbl.Text = "..."
+
+local modLbl = Instance.new("TextLabel", levelPanel)
+modLbl.BackgroundTransparency = 1
+modLbl.Size = UDim2.new(1, -16, 0, 60)
+modLbl.Position = UDim2.fromOffset(8, 156)
+modLbl.TextWrapped = true              -- แก้จาก WrapText
+modLbl.TextXAlignment = Enum.TextXAlignment.Left
+modLbl.TextYAlignment = Enum.TextYAlignment.Top
+modLbl.Font = Enum.Font.Gotham
+modLbl.TextSize = 10
+modLbl.TextColor3 = Color3.fromRGB(170, 220, 255)
+modLbl.Text = ""
+
+-- (B) ทีม 6 ตัว
+local teamPanel = panel(176, 168, "ทีม 6 ตัว")
+local teamGrid = Instance.new("Frame", teamPanel)
+teamGrid.Size = UDim2.new(1, -12, 1, -34)
+teamGrid.Position = UDim2.fromOffset(6, 30)
+teamGrid.BackgroundTransparency = 1
+local tgrid = Instance.new("UIGridLayout", teamGrid)
+tgrid.CellSize = UDim2.fromOffset(48, 62)
+tgrid.CellPadding = UDim2.fromOffset(4, 4)
+
+local function drawTeam()
+	for _, c in ipairs(teamGrid:GetChildren()) do
+		if not c:IsA("UIGridLayout") then c:Destroy() end
+	end
+	for i = 1, 6 do
+		local e = H.Team[i]
+		local card = Instance.new("Frame", teamGrid)
+		card.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+		card.BorderSizePixel = 0
+		Instance.new("UICorner", card).CornerRadius = UDim.new(0, 6)
+		local im = Instance.new("ImageLabel", card)
+		im.Size = UDim2.new(1, -4, 0, 40)
+		im.Position = UDim2.fromOffset(2, 2)
+		im.BackgroundColor3 = Color3.fromRGB(24, 24, 34)
+		im.Image = (e and e.img) or ""
+		im.ScaleType = Enum.ScaleType.Crop
+		Instance.new("UICorner", im).CornerRadius = UDim.new(0, 5)
+		local nm = Instance.new("TextLabel", card)
+		nm.BackgroundTransparency = 1
+		nm.Size = UDim2.new(1, -4, 0, 18)
+		nm.Position = UDim2.new(0, 2, 1, -20)
+		nm.Font = Enum.Font.GothamBold
+		nm.TextSize = 9
+		nm.TextTruncate = Enum.TextTruncate.AtEnd
+		nm.TextColor3 = (e and rcol(e.rarity)) or Color3.fromRGB(150, 150, 165)
+		nm.Text = (e and e.name) or "ว่าง"
+		if not (e and e.img) then
+			im.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+		end
+	end
+end
+drawTeam()
+
+-- (C) รางวัลล่าสุด
+local logPanel = panel(352, 158, "รางวัลล่าสุด")
+local logScroll = Instance.new("ScrollingFrame", logPanel)
+logScroll.Size = UDim2.new(1, -12, 1, -34)
+logScroll.Position = UDim2.fromOffset(6, 30)
+logScroll.BackgroundTransparency = 1
+logScroll.ScrollBarThickness = 4
+logScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+logScroll.CanvasSize = UDim2.new()
+local lLayout = Instance.new("UIListLayout", logScroll)
+lLayout.Padding = UDim.new(0, 3)
+
+H.RefreshLog = function()
+	for _, c in ipairs(logScroll:GetChildren()) do
+		if not c:IsA("UIListLayout") then c:Destroy() end
+	end
+	if #H.Rewards == 0 then
+		local l = Instance.new("TextLabel", logScroll)
+		l.BackgroundTransparency = 1
+		l.Size = UDim2.new(1, 0, 0, 20)
+		l.Font = Enum.Font.Gotham
+		l.TextSize = 10
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextColor3 = Color3.fromRGB(140, 140, 160)
+		l.Text = "ยังไม่มีรางวัล"
+		return
+	end
+	for _, e in ipairs(H.Rewards) do
+		local row = Instance.new("Frame", logScroll)
+		row.Size = UDim2.new(1, -4, 0, 22)
+		row.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
+		row.BorderSizePixel = 0
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
+		if e.img then
+			local i = Instance.new("ImageLabel", row)
+			i.Size = UDim2.fromOffset(18, 18)
+			i.Position = UDim2.fromOffset(3, 2)
+			i.BackgroundTransparency = 1
+			i.Image = e.img
+		end
+		local t = Instance.new("TextLabel", row)
+		t.BackgroundTransparency = 1
+		t.Size = UDim2.new(1, -26, 1, 0)
+		t.Position = UDim2.fromOffset(24, 0)
+		t.Font = Enum.Font.GothamBold
+		t.TextSize = 10
+		t.TextXAlignment = Enum.TextXAlignment.Left
+		t.TextColor3 = rcol(e.rarity)
+		t.TextTruncate = Enum.TextTruncate.AtEnd
+		t.Text = ("%s +%s"):format(e.label, fmt(e.amount))
+	end
+end
+H.RefreshLog()
+
+-- ปุ่มล่าง
+local bottom = Instance.new("Frame", main)
+bottom.Size = UDim2.new(1, -20, 0, 36)
+bottom.Position = UDim2.new(0, 10, 1, -42)
+bottom.BackgroundTransparency = 1
+
+local notifyBtn = Instance.new("TextButton", bottom)
+notifyBtn.Size = UDim2.fromOffset(120, 30)
+notifyBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 190)
+notifyBtn.Font = Enum.Font.GothamBold
+notifyBtn.TextSize = 12
+notifyBtn.TextColor3 = Color3.new(1, 1, 1)
+notifyBtn.Text = "แจ้งเตือน: เปิด"
+Instance.new("UICorner", notifyBtn).CornerRadius = UDim.new(0, 8)
+notifyBtn.MouseButton1Click:Connect(function()
+	H.Flags.Notify = not H.Flags.Notify
+	notifyBtn.Text = "แจ้งเตือน: " .. (H.Flags.Notify and "เปิด" or "ปิด")
+	notifyBtn.BackgroundColor3 = H.Flags.Notify and Color3.fromRGB(40, 90, 190) or Color3.fromRGB(70, 70, 80)
+end)
+
+local rescan = Instance.new("TextButton", bottom)
+rescan.Size = UDim2.fromOffset(100, 30)
+rescan.Position = UDim2.fromOffset(128, 0)
+rescan.BackgroundColor3 = Color3.fromRGB(45, 140, 90)
+rescan.Font = Enum.Font.GothamBold
+rescan.TextSize = 12
+rescan.TextColor3 = Color3.new(1, 1, 1)
+rescan.Text = "สแกนใหม่"
+Instance.new("UICorner", rescan).CornerRadius = UDim.new(0, 8)
+rescan.MouseButton1Click:Connect(function()
+	H.LastSnap = snapshot()
+	H.RefreshMoney()
+	task.spawn(function()
+		refreshTeam()
+		drawTeam()
+	end)
+end)
+
+-- popup
+local popHolder = Instance.new("Frame", gui)
+popHolder.Size = UDim2.fromOffset(260, 300)
+popHolder.Position = UDim2.new(1, -280, 0, 90)
+popHolder.BackgroundTransparency = 1
+local pLayout = Instance.new("UIListLayout", popHolder)
+pLayout.Padding = UDim.new(0, 6)
+
+H.NotifyCard = function(e)
+	local card = Instance.new("Frame", popHolder)
+	card.Size = UDim2.new(1, 0, 0, 34)
+	card.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+	card.BorderSizePixel = 0
+	card.BackgroundTransparency = 0.12
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+	local st = Instance.new("UIStroke", card)
+	st.Color = rcol(e.rarity)
+	st.Thickness = 1.5
+	if e.img then
+		local i = Instance.new("ImageLabel", card)
+		i.Size = UDim2.fromOffset(24, 24)
+		i.Position = UDim2.fromOffset(5, 5)
+		i.BackgroundTransparency = 1
+		i.Image = e.img
+	end
+	local t = Instance.new("TextLabel", card)
+	t.BackgroundTransparency = 1
+	t.Size = UDim2.new(1, -36, 1, 0)
+	t.Position = UDim2.fromOffset(33, 0)
+	t.Font = Enum.Font.GothamBold
+	t.TextSize = 12
+	t.TextXAlignment = Enum.TextXAlignment.Left
+	t.TextColor3 = rcol(e.rarity)
+	t.TextTruncate = Enum.TextTruncate.AtEnd
+	t.Text = ("%s  +%s"):format(e.label, fmt(e.amount))
+	task.delay(6, function()
+		if card.Parent then
+			TweenService:Create(card, TweenInfo.new(0.4), { BackgroundTransparency = 1 }):Play()
+			task.wait(0.45)
+			if card.Parent then card:Destroy() end
+		end
+	end)
+end
+
+------------------------------------------------------------------
+-- LOOP / STOP
+------------------------------------------------------------------
+H.Stop = function()
+	H.Running = false
+	for _, c in ipairs(H.Conns) do
+		pcall(function() c:Disconnect() end)
+	end
+	if gui then gui:Destroy() end
+end
+
+task.spawn(function()
+	while H.Running do
+		pcall(function()
+			local lv = readLevel()
+			H.LevelName = lv.name
+			H.MapImg = lv.img
+			mapNameLbl.Text = (lv.lobby and "Lobby (ยังไม่ลงด่าน)" or lv.name)
+				.. ((lv.id and lv.id ~= lv.name) and ("\n[" .. tostring(lv.id) .. "]") or "")
+			if lv.img then mapThumb.Image = lv.img end
+			modLbl.Text = (#lv.modifiers > 0) and table.concat(lv.modifiers, "\n") or ""
+			refreshTeam()
+			drawTeam()
+		end)
+		task.wait(3)
+	end
+end)
+
+local dbg = {}
+do
+	local s = snapshot()
+	for k, v in pairs(s.res) do dbg[#dbg + 1] = k .. "=" .. v end
+	for k, v in pairs(s.tokens) do dbg[#dbg + 1] = k .. "=" .. v end
+end
+print("[2K v7.3] สกุลที่อ่านได้: " .. table.concat(dbg, ", "))
+return "ok"

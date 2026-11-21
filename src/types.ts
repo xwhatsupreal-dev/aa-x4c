@@ -25,14 +25,22 @@ export interface StageInfo {
   mapImageId?: string;
 }
 
+export interface CurrencyIcons {
+  gold?: string;
+  gems?: string;
+  summerPearls?: string;
+}
+
 export interface ExtraStats {
   playerXp?: number;
   resource?: number;
+  summerPearls?: number;
   trophies?: number;
   rebirthTokens?: number;
   behelitXp?: number;
   curseTokens?: number;
   traitTokens?: number;
+  eventResources?: Record<string, number>;
 }
 
 export interface TeamUnit {
@@ -58,6 +66,7 @@ export interface InventoryItem {
   qty: number;
   kind: 'normal' | 'unique' | 'unit';
   iconId?: string;
+  tier?: string;
 }
 
 export interface RewardEntry {
@@ -70,6 +79,7 @@ export interface RewardEntry {
   qty: number;
   src: string;
   iconId?: string;
+  tier?: string;
   runId?: string;
   stageName?: string;
   stageWorld?: string;
@@ -88,6 +98,7 @@ export interface RewardTotal {
   rarity: Rarity;
   qty: number;
   iconId?: string;
+  tier?: string;
 }
 
 export interface RobloxAvatarAppearance {
@@ -117,6 +128,7 @@ export interface AccountSnapshot {
   gold: number;
   gems: number;
   level?: number;
+  currencyIcons?: CurrencyIcons;
   extraStats?: ExtraStats;
   currentStage?: StageInfo;
   equipped: TeamUnit[];
@@ -147,6 +159,7 @@ export interface SyncPayload {
   gold?: number;
   gems?: number;
   level?: number;
+  currencyIcons?: CurrencyIcons;
   extraStats?: ExtraStats;
   currentStage?: StageInfo;
   equipped?: Array<{
@@ -167,6 +180,7 @@ export interface SyncPayload {
     qty?: number;
     kind?: 'normal' | 'unique' | 'unit';
     iconId?: string;
+    tier?: string | number;
   }>;
   rewards?: Array<{
     t?: string;
@@ -178,6 +192,7 @@ export interface SyncPayload {
     qty?: number;
     src?: string;
     iconId?: string;
+    tier?: string | number;
     runId?: string;
     stageName?: string;
     stageWorld?: string;
