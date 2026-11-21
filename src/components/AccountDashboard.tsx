@@ -486,7 +486,7 @@ export function AccountDashboard({
           {/* Current Stage Card with Real Roblox MapIcons Artwork */}
           {stage && (
             <div className="mt-3.5 rounded-2xl bg-[#10151A] border border-white/[0.08] p-2.5 flex items-center gap-3">
-              <div className="relative w-14 h-14 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[#16212C] to-[#0E1319] border border-white/[0.10]">
+              <div className="relative w-16 h-14 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[#16212C] to-[#0E1319] border border-white/[0.10]">
                 <RobloxAssetThumb
                   kind="stage"
                   name={stage.name}
@@ -1268,7 +1268,7 @@ export function AccountDashboard({
                         key={batch.id}
                         className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3 py-3.5 sm:grid-cols-[7.25rem_minmax(0,1fr)]"
                       >
-                        {/* Left Stage Thumbnail Card with Real AA Stage Artwork */}
+                        {/* Left Stage Thumbnail Card with Real In-Game Uploaded / Wiki Stage Artwork */}
                         <div
                           className="relative row-span-1 flex flex-col justify-between aspect-video w-full self-start overflow-hidden rounded-xl p-2 sm:row-span-2 sm:aspect-auto sm:min-h-[4.5rem] sm:self-stretch"
                           style={{

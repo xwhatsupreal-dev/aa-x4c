@@ -302,17 +302,49 @@ export async function resolveAaImageUrl(query: AaImageQuery): Promise<string | n
       ]);
       resolved = await queryWikiFiles(candidates, 160);
     } else if (kind === 'stage') {
+      const STAGE_WIKI_ALIAS_MAP: Array<[RegExp, string[]]> = [
+        [/shibuya/i, ['File:Shibuya Incident UOThumbnail.png']],
+        [/night[\s_-]*market/i, ['File:Night Market Thumbnail.png']],
+        [/infinity[\s_-]*castle/i, ['File:Infinity Castle.png']],
+        [/namak|namek/i, ['File:Map - Planet Namak.png']],
+        [/marine/i, ["File:Map - Marine's Ford.png"]],
+        [/clover/i, ['File:Map - Clover Kingdom.png']],
+        [/sand[\s_-]*village|hidden[\s_-]*sand/i, ['File:Map - Hidden Sand Village.png']],
+        [/hollow[\s_-]*invasion/i, ['File:Map - Hollow Invasion.png']],
+        [/hollow/i, ['File:Map - Hollow World.png']],
+        [/hero[\s_-]*city|midnight/i, ['File:Map - Hero City.png']],
+        [/ghoul/i, ['File:Map - Ghoul City.png']],
+        [/snowy/i, ['File:Map - Snowy Town.png']],
+        [/undead|tomb/i, ['File:Map - Undead Tomb.png']],
+        [/ant[\s_-]*kingdom/i, ['File:Map - Ant Kingdom.png']],
+        [/alien|spaceship/i, ['File:Map - Alien Spaceship.png']],
+        [/puppet|dressrosa/i, ['File:Map - Puppet Island.png']],
+        [/virtual|dungeon/i, ['File:Map - Virtual Dungeon.png']],
+        [/windhym/i, ['File:Map - Windhym.png']],
+        [/fabled/i, ['File:Map - Fabled Kingdom.png']],
+        [/cursed[\s_-]*academy|jujutsu/i, ['File:Map - Cursed Academy.png']],
+        [/cape[\s_-]*canaveral|jojo/i, ['File:Map - Cape Canaveral.png']],
+        [/magic[\s_-]*town/i, ['File:Map - Magic Town.png']],
+        [/shinganshinu|aot|titan/i, ['File:Map - Shinganshinu District.png']],
+      ];
       const mapTitle = titleCaseFromId(map);
       const stageNames = uniqueList([name, baseName, world, mapTitle]).filter(
         (s) => s.toLowerCase() !== 'lobby' && s !== 'ล็อบบี้'
       );
-      const fileCandidates = uniqueList(
-        stageNames.flatMap((s) => [
+      const combinedStage = [name, id, world, map].filter(Boolean).join(' ');
+      const aliasFiles: string[] = [];
+      for (const [re, files] of STAGE_WIKI_ALIAS_MAP) {
+        if (re.test(combinedStage)) aliasFiles.push(...files);
+      }
+      const fileCandidates = uniqueList([
+        ...aliasFiles,
+        ...stageNames.flatMap((s) => [
           `File:Map - ${s}.png`,
           `File:${s} UOThumbnail.png`,
+          `File:${s} Thumbnail.png`,
           `File:${s}.png`,
-        ])
-      );
+        ]),
+      ]);
       resolved = await queryWikiFiles(fileCandidates, 320);
       if (!resolved && stageNames.length > 0) {
         resolved = await searchWikiFileStrict(`Map ${stageNames[0]}`, 320);

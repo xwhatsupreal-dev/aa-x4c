@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.5.1';
-export const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 22:45 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.6.0';
+export const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 23:45 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,15 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.6.0',
+    updatedAt: '21 พ.ย. 2569 · 23:45 น. (เวลาไทย)',
+    highlights: [
+      'ระบบสแกนและอัปโหลด "รูปด่านและไอเทมจริงจากในเกม" ขึ้นเว็บอัตโนมัติ (ใช้ Roblox EditableImage อ่านพิกเซลจาก MapIcons / RES_ICON / OverrideIcons ในตัวเกมแล้วแปลงเป็น PNG เก็บไว้บนเซิร์ฟเวอร์ครั้งเดียว ไม่ต้องเจนรูป)',
+      'เพิ่มปุ่ม "สแกนรูปเกม" ในหน้าต่างสคริปต์ พร้อมเช็ค /api/asset-exists ก่อนทุกครั้งเพื่อไม่ให้อัปโหลดซ้ำและประหยัดโควต้า Upstash/KV',
+      'เว็บจะแสดงรูปจริงที่สคริปต์อัปโหลดจากเกมเป็นอันดับแรก (เช่น ด่านใหม่ Update 21 อย่าง Sky Island) และใช้ภาพจาก Anime Adventures Wiki เป็นตัวเสริม',
+    ],
+  },
   {
     version: '2.5.1',
     updatedAt: '21 พ.ย. 2569 · 22:45 น. (เวลาไทย)',

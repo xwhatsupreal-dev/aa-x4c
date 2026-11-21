@@ -15,6 +15,7 @@ import {
   resolveAaImageUrl,
   type AaImageKind,
 } from './src/utils/aaImageResolver.ts';
+import { encodeRawPixelsToPng } from './src/utils/pngEncoder.ts';
 import {
   fetchRobloxAvatarInfo,
   isAllowedRobloxCdnUrl,
@@ -40,6 +41,48 @@ interface VaultStore {
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'vault-store.json');
+const ASSETS_DIR = path.join(DATA_DIR, 'assets');
+const uploadedAssetCache = new Map<string, Buffer>();
+
+function resolveConfinedAssetPath(assetId: string): string | null {
+  if (!/^\d{4,15}$/.test(assetId)) return null;
+  const resolved = path.resolve(ASSETS_DIR, `${assetId}.png`);
+  if (!resolved.startsWith(ASSETS_DIR + path.sep)) return null;
+  return resolved;
+}
+
+function getUploadedAssetPng(assetId: string): Buffer | null {
+  const filePath = resolveConfinedAssetPath(assetId);
+  if (!filePath) return null;
+  const cached = uploadedAssetCache.get(assetId);
+  if (cached) return cached;
+  try {
+    if (fs.existsSync(filePath)) {
+      const buf = fs.readFileSync(filePath);
+      if (buf.length > 0) {
+        uploadedAssetCache.set(assetId, buf);
+        return buf;
+      }
+    }
+  } catch {
+    // ignore read errors
+  }
+  return null;
+}
+
+function saveUploadedAssetPng(assetId: string, pngBuf: Buffer): void {
+  const filePath = resolveConfinedAssetPath(assetId);
+  if (!filePath) return;
+  uploadedAssetCache.set(assetId, pngBuf);
+  try {
+    if (!fs.existsSync(ASSETS_DIR)) {
+      fs.mkdirSync(ASSETS_DIR, { recursive: true });
+    }
+    fs.writeFileSync(filePath, pngBuf);
+  } catch (err) {
+    console.error('Failed to persist uploaded asset PNG:', err);
+  }
+}
 
 function loadStore(): VaultStore {
   try {
@@ -389,17 +432,120 @@ async function startServer() {
     }
   });
 
-  // Same-origin Roblox asset thumbnail proxy (rejects private Roblox blocked placeholders)
+  // Check which Roblox assetIds already have real in-game uploaded images stored on server
+  app.get('/api/asset-exists', (req, res) => {
+    const rawSingle = typeof req.query.id === 'string' ? req.query.id : '';
+    const rawMulti = typeof req.query.ids === 'string' ? req.query.ids : '';
+    const ids = `${rawSingle},${rawMulti}`
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => /^\d{4,15}$/.test(s))
+      .slice(0, 64);
+    const existing = ids.filter((id) => Boolean(getUploadedAssetPng(id)));
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, existing, exists: existing.length > 0 });
+  });
+
+  // Receive real in-game pixel/PNG captures scanned by the Lua script inside Roblox
+  app.post('/api/asset-upload', (req, res) => {
+    let body: Record<string, unknown> | null = null;
+    if (typeof req.body === 'string') {
+      try {
+        body = JSON.parse(req.body) as Record<string, unknown>;
+      } catch {
+        res.status(400).json({ ok: false, error: 'Invalid JSON payload' });
+        return;
+      }
+    } else if (req.body && typeof req.body === 'object') {
+      body = req.body as Record<string, unknown>;
+    }
+
+    const rawAssetId = body?.assetId ?? body?.id;
+    const assetId =
+      typeof rawAssetId === 'string' || typeof rawAssetId === 'number'
+        ? String(rawAssetId).match(/\d{4,15}/)?.[0] || ''
+        : '';
+    if (!assetId) {
+      res.status(400).json({ ok: false, error: 'Invalid assetId' });
+      return;
+    }
+
+    try {
+      let pngBuf: Buffer | null = null;
+
+      if (typeof body?.pngBase64 === 'string' && body.pngBase64.length > 16) {
+        if (body.pngBase64.length > 320_000) {
+          res.status(400).json({ ok: false, error: 'PNG payload too large' });
+          return;
+        }
+        const raw = Buffer.from(body.pngBase64, 'base64');
+        const isPng =
+          raw.length >= 8 &&
+          raw[0] === 0x89 &&
+          raw[1] === 0x50 &&
+          raw[2] === 0x4e &&
+          raw[3] === 0x47 &&
+          raw[4] === 0x0d &&
+          raw[5] === 0x0a &&
+          raw[6] === 0x1a &&
+          raw[7] === 0x0a;
+        if (!isPng) {
+          res.status(400).json({ ok: false, error: 'Invalid PNG header' });
+          return;
+        }
+        pngBuf = raw;
+      } else if (typeof body?.data === 'string' && body.data.length > 0) {
+        if (body.data.length > 380_000) {
+          res.status(400).json({ ok: false, error: 'Raw pixel payload too large' });
+          return;
+        }
+        const width = Math.floor(Number(body.width) || 0);
+        const height = Math.floor(Number(body.height) || 0);
+        const channels = Number(body.channels) === 4 ? 4 : 3;
+        if (width < 1 || height < 1 || width > 256 || height > 256) {
+          res.status(400).json({ ok: false, error: 'Invalid dimensions (1..256)' });
+          return;
+        }
+        const rawPixels = Buffer.from(body.data, 'base64');
+        pngBuf = encodeRawPixelsToPng(width, height, channels, rawPixels);
+      }
+
+      if (!pngBuf || pngBuf.length < 32 || pngBuf.length > 220_000) {
+        res.status(400).json({ ok: false, error: 'Invalid or oversized image payload' });
+        return;
+      }
+
+      saveUploadedAssetPng(assetId, pngBuf);
+      res.json({
+        ok: true,
+        assetId,
+        bytes: pngBuf.length,
+        url: `/api/asset-image?id=${assetId}`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Encoding failed';
+      res.status(400).json({ ok: false, error: msg });
+    }
+  });
+
+  // Same-origin Roblox asset thumbnail proxy (Priority 1: real in-game uploaded PNG -> Priority 2: public Roblox thumb)
   app.get('/api/asset-image', async (req, res) => {
     const rawId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
     if (!/^\d{4,15}$/.test(rawId)) {
       res.status(400).end('Invalid Roblox asset ID');
       return;
     }
+    const uploaded = getUploadedAssetPng(rawId);
+    if (uploaded) {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(uploaded);
+      return;
+    }
     try {
       const imageUrl = await resolveRobloxAssetImageUrl(rawId);
       if (!imageUrl || !isAllowedRobloxCdnUrl(imageUrl) || isBlockedRobloxPlaceholderUrl(imageUrl)) {
-        res.setHeader('Cache-Control', 'public, max-age=1800');
+        res.setHeader('Cache-Control', 'no-store');
         res.status(404).end();
         return;
       }
@@ -417,7 +563,7 @@ async function startServer() {
     }
   });
 
-  // Same-origin Anime Adventures artwork proxy (public Roblox thumb -> official AA Wiki artwork)
+  // Same-origin Anime Adventures artwork proxy (1: real in-game uploaded PNG -> 2: public Roblox thumb -> 3: official AA Wiki)
   app.get('/api/aa-image', async (req, res) => {
     const rawKind = typeof req.query.kind === 'string' ? req.query.kind.trim().toLowerCase() : 'item';
     const kind: AaImageKind =
@@ -435,15 +581,27 @@ async function startServer() {
       return;
     }
 
+    // Priority #1: Real in-game texture captured & uploaded by the Lua script!
+    const cleanAssetId = assetId.match(/\d{4,15}/)?.[0] || '';
+    if (cleanAssetId) {
+      const uploaded = getUploadedAssetPng(cleanAssetId);
+      if (uploaded) {
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send(uploaded);
+        return;
+      }
+    }
+
     try {
       const imageUrl = await resolveAaImageUrl({ kind, name, id, world, map, assetId });
       if (!imageUrl || !isAllowedAaImageUrl(imageUrl)) {
-        res.setHeader('Cache-Control', 'public, max-age=1800');
+        res.setHeader('Cache-Control', cleanAssetId ? 'no-store' : 'public, max-age=1800');
         res.status(404).end();
         return;
       }
       const upstream = await fetch(imageUrl, {
-        headers: { 'User-Agent': 'AAVault/2.5' },
+        headers: { 'User-Agent': 'AAVault/2.6' },
       });
       if (!upstream.ok) {
         res.setHeader('Cache-Control', 'public, max-age=600');

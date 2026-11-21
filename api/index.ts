@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 type Rarity =
@@ -197,8 +198,8 @@ interface SyncPayload {
 
 type Req = IncomingMessage & { body?: unknown };
 
-const SCRIPT_VERSION = '2.5.1';
-const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 22:45 น. (เวลาไทย)';
+const SCRIPT_VERSION = '2.6.0';
+const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 23:45 น. (เวลาไทย)';
 
 const RARITY_ORDER: Rarity[] = [
   'Secret',
@@ -219,9 +220,17 @@ const CORS_HEADERS: Record<string, string> = {
 
 const TMP_STORE_PATH = '/tmp/aa-vault-store.json';
 
+interface StoredAsset {
+  pngBase64: string;
+  bytes: number;
+  uploadedAt: number;
+  label?: string;
+}
+
 interface LocalTmpStore {
   rooms: Record<string, Record<string, AccountSnapshot>>;
   shares: Record<string, ShareRecord>;
+  assets?: Record<string, StoredAsset>;
 }
 
 let tmpCache: LocalTmpStore | null = null;
@@ -232,6 +241,7 @@ function loadTmpStore(): LocalTmpStore {
     if (fs.existsSync(TMP_STORE_PATH)) {
       const parsed = JSON.parse(fs.readFileSync(TMP_STORE_PATH, 'utf-8')) as LocalTmpStore;
       if (parsed && typeof parsed.rooms === 'object' && typeof parsed.shares === 'object') {
+        if (!parsed.assets || typeof parsed.assets !== 'object') parsed.assets = {};
         tmpCache = parsed;
         return tmpCache;
       }
@@ -239,7 +249,7 @@ function loadTmpStore(): LocalTmpStore {
   } catch {
     // ignore corrupt tmp cache
   }
-  tmpCache = { rooms: {}, shares: {} };
+  tmpCache = { rooms: {}, shares: {}, assets: {} };
   return tmpCache;
 }
 
@@ -250,6 +260,113 @@ function saveTmpStore(next: LocalTmpStore) {
   } catch {
     // ignore fs write errors
   }
+}
+
+const PNG_SIG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function makePngChunk(type: string, data: Buffer): Buffer {
+  const typeBuf = Buffer.from(type, 'ascii');
+  const lenBuf = Buffer.alloc(4);
+  lenBuf.writeUInt32BE(data.length, 0);
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
+  return Buffer.concat([lenBuf, typeBuf, data, crcBuf]);
+}
+
+function encodeRawPixelsToPng(
+  width: number,
+  height: number,
+  channels: 3 | 4,
+  rawPixels: Buffer
+): Buffer {
+  const w = Math.floor(width);
+  const h = Math.floor(height);
+  if (w < 1 || h < 1 || w > 256 || h > 256) {
+    throw new Error('Invalid image dimensions (must be 1..256)');
+  }
+  const expectedBytes = w * h * channels;
+  if (rawPixels.length < expectedBytes) {
+    throw new Error(`Incomplete pixel buffer: got ${rawPixels.length}, expected ${expectedBytes}`);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = channels === 4 ? 6 : 2;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  const stride = w * channels;
+  const scanlines = Buffer.alloc((stride + 1) * h);
+  for (let y = 0; y < h; y++) {
+    const dstOff = y * (stride + 1);
+    scanlines[dstOff] = 0;
+    rawPixels.copy(scanlines, dstOff + 1, y * stride, (y + 1) * stride);
+  }
+  const compressed = zlib.deflateSync(scanlines, { level: 9 });
+  return Buffer.concat([
+    PNG_SIG,
+    makePngChunk('IHDR', ihdr),
+    makePngChunk('IDAT', compressed),
+    makePngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+const uploadedAssetCache = new Map<string, Buffer>();
+
+async function getUploadedAssetPng(assetId: string): Promise<Buffer | null> {
+  if (!/^\d{4,15}$/.test(assetId)) return null;
+  const mem = uploadedAssetCache.get(assetId);
+  if (mem) return mem;
+  try {
+    const stored = await storeGet<StoredAsset>(`asset:${assetId}`);
+    if (stored && typeof stored.pngBase64 === 'string' && stored.pngBase64.length > 16) {
+      const buf = Buffer.from(stored.pngBase64, 'base64');
+      if (buf.length >= 32) {
+        uploadedAssetCache.set(assetId, buf);
+        return buf;
+      }
+    }
+  } catch {
+    // ignore storage lookup errors
+  }
+  return null;
+}
+
+async function saveUploadedAssetPng(
+  assetId: string,
+  pngBuf: Buffer,
+  label?: string
+): Promise<void> {
+  if (!/^\d{4,15}$/.test(assetId)) return;
+  uploadedAssetCache.set(assetId, pngBuf);
+  const rec: StoredAsset = {
+    pngBase64: pngBuf.toString('base64'),
+    bytes: pngBuf.length,
+    uploadedAt: Date.now(),
+    label: label ? label.slice(0, 64) : undefined,
+  };
+  await storePut(`asset:${assetId}`, rec);
 }
 
 function sendJson(res: ServerResponse, data: unknown, status = 200) {
@@ -767,9 +884,45 @@ async function resolveAaImageUrl(opts: {
       const stageNames = uniqueStrings([name, baseName, world, mapTitle]).filter(
         (s) => s.toLowerCase() !== 'lobby' && s !== 'ล็อบบี้'
       );
-      const fileCandidates = uniqueStrings(
-        stageNames.flatMap((s) => [`File:Map - ${s}.png`, `File:${s} UOThumbnail.png`, `File:${s}.png`])
-      );
+      const combinedStage = [name, id, world, map].filter(Boolean).join(' ');
+      const STAGE_WIKI_ALIAS_MAP: Array<[RegExp, string[]]> = [
+        [/shibuya/i, ['File:Shibuya Incident UOThumbnail.png']],
+        [/night[\s_-]*market/i, ['File:Night Market Thumbnail.png']],
+        [/infinity[\s_-]*castle/i, ['File:Infinity Castle.png']],
+        [/namak|namek/i, ['File:Map - Planet Namak.png']],
+        [/marine/i, ["File:Map - Marine's Ford.png"]],
+        [/clover/i, ['File:Map - Clover Kingdom.png']],
+        [/sand[\s_-]*village|hidden[\s_-]*sand/i, ['File:Map - Hidden Sand Village.png']],
+        [/hollow[\s_-]*invasion/i, ['File:Map - Hollow Invasion.png']],
+        [/hollow/i, ['File:Map - Hollow World.png']],
+        [/hero[\s_-]*city|midnight/i, ['File:Map - Hero City.png']],
+        [/ghoul/i, ['File:Map - Ghoul City.png']],
+        [/snowy/i, ['File:Map - Snowy Town.png']],
+        [/undead|tomb/i, ['File:Map - Undead Tomb.png']],
+        [/ant[\s_-]*kingdom/i, ['File:Map - Ant Kingdom.png']],
+        [/alien|spaceship/i, ['File:Map - Alien Spaceship.png']],
+        [/puppet|dressrosa/i, ['File:Map - Puppet Island.png']],
+        [/virtual|dungeon/i, ['File:Map - Virtual Dungeon.png']],
+        [/windhym/i, ['File:Map - Windhym.png']],
+        [/fabled/i, ['File:Map - Fabled Kingdom.png']],
+        [/cursed[\s_-]*academy|jujutsu/i, ['File:Map - Cursed Academy.png']],
+        [/cape[\s_-]*canaveral|jojo/i, ['File:Map - Cape Canaveral.png']],
+        [/magic[\s_-]*town/i, ['File:Map - Magic Town.png']],
+        [/shinganshinu|aot|titan/i, ['File:Map - Shinganshinu District.png']],
+      ];
+      const aliasFiles: string[] = [];
+      for (const [re, files] of STAGE_WIKI_ALIAS_MAP) {
+        if (re.test(combinedStage)) aliasFiles.push(...files);
+      }
+      const fileCandidates = uniqueStrings([
+        ...aliasFiles,
+        ...stageNames.flatMap((s) => [
+          `File:Map - ${s}.png`,
+          `File:${s} UOThumbnail.png`,
+          `File:${s} Thumbnail.png`,
+          `File:${s}.png`,
+        ]),
+      ]);
       resolved = await queryWikiFiles(fileCandidates, 320);
       if (!resolved && stageNames.length > 0) {
         resolved = await searchWikiFileStrict(`Map ${stageNames[0]}`, 320);
@@ -802,13 +955,23 @@ async function resolveAaImageUrl(opts: {
   return finalUrl;
 }
 
-async function readBodyText(req: Req): Promise<string> {
-  if (typeof req.body === 'string') return req.body;
-  if (Buffer.isBuffer(req.body)) return req.body.toString('utf-8');
+async function readBodyText(req: Req, maxBytes = 1_500_000): Promise<string> {
+  if (typeof req.body === 'string') return req.body.slice(0, maxBytes);
+  if (Buffer.isBuffer(req.body)) return req.body.subarray(0, maxBytes).toString('utf-8');
   if (req.body && typeof req.body === 'object') return JSON.stringify(req.body);
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    let total = 0;
+    req.on('data', (chunk) => {
+      const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += b.length;
+      if (total > maxBytes) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(b);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
     req.on('error', reject);
   });
@@ -902,6 +1065,9 @@ async function storeGet<T>(key: string): Promise<T | null> {
   if (key.startsWith('share:')) {
     return (tmp.shares[key.slice(6)] as unknown as T) ?? null;
   }
+  if (key.startsWith('asset:')) {
+    return (tmp.assets?.[key.slice(6)] as unknown as T) ?? null;
+  }
   return null;
 }
 
@@ -940,6 +1106,9 @@ async function storePut(key: string, value: unknown): Promise<void> {
     tmp.rooms[key.slice(5)] = value as Record<string, AccountSnapshot>;
   } else if (key.startsWith('share:')) {
     tmp.shares[key.slice(6)] = value as ShareRecord;
+  } else if (key.startsWith('asset:')) {
+    if (!tmp.assets) tmp.assets = {};
+    tmp.assets[key.slice(6)] = value as StoredAsset;
   }
   saveTmpStore(tmp);
 }
@@ -1150,16 +1319,19 @@ local function act(label, w, col, cb)
 	return b
 end
 
-act("ซิงค์ทันที", 86, Color3.fromRGB(16, 145, 96), function()
+act("ซิงค์ทันที", 88, Color3.fromRGB(16, 145, 96), function()
 	Hub.HttpBlocked = false
 	Hub.FailNotified = false
 	pcall(Hub.UpdateLocation)
 	Hub.SyncToWeb(true, "manual")
 end)
-act("คัดลอกเข้าเว็บ", 104, Color3.fromRGB(36, 98, 168), function()
+act("สแกนรูปเกม", 96, Color3.fromRGB(22, 118, 148), function()
+	Hub.ScanAndUploadGameAssets(true)
+end)
+act("คัดลอกเข้าเว็บ", 100, Color3.fromRGB(36, 98, 168), function()
 	Hub.CopyForWeb()
 end)
-act("รีเฟรช", 74, Color3.fromRGB(46, 52, 68), function()
+act("รีเฟรช", 80, Color3.fromRGB(46, 52, 68), function()
 	pcall(Hub.UpdateLocation)
 	Hub.InvalidatePics()
 	Hub.Team = Hub.ReadTeam()
@@ -1170,7 +1342,7 @@ act("รีเฟรช", 74, Color3.fromRGB(46, 52, 68), function()
 	end)
 end)
 local picBtn
-picBtn = act("รูปทีม: ภาพนิ่ง", 102, Color3.fromRGB(46, 52, 68), function()
+picBtn = act("รูปทีม: ภาพนิ่ง", 126, Color3.fromRGB(46, 52, 68), function()
 	Hub.Flags.Pic = (Hub.Flags.Pic == "photo") and "card" or "photo"
 	picBtn.Text = "รูปทีม: " .. (Hub.Flags.Pic == "photo" and "ภาพนิ่ง" or "การ์ด 2D")
 	Hub.InvalidatePics()
@@ -1179,11 +1351,11 @@ picBtn = act("รูปทีม: ภาพนิ่ง", 102, Color3.fromRGB(46
 	pcall(Hub.Render)
 end)
 local ntBtn
-ntBtn = act("แจ้งเตือน: เปิด", 104, Color3.fromRGB(46, 52, 68), function()
+ntBtn = act("แจ้งเตือน: เปิด", 126, Color3.fromRGB(46, 52, 68), function()
 	Hub.Flags.Notify = not Hub.Flags.Notify
 	ntBtn.Text = "แจ้งเตือน: " .. (Hub.Flags.Notify and "เปิด" or "ปิด")
 end)
-act("ล้างประวัติ", 86, Color3.fromRGB(110, 46, 54), function()
+act("ล้างประวัติ", 118, Color3.fromRGB(110, 46, 54), function()
 	Hub.Rewards = {}
 	Hub.Totals = {}
 	Hub.PendingDrops = {}
@@ -1561,12 +1733,14 @@ function Hub.Render()
 	end
 
 	local stats = Hub.CurrentStats or {}
-	footer.Text = string.format("Lv.%s • Gold %s • Gems %s • XP %s\\nเว็บ: %s",
+	local assetSuffix = (Hub.AssetStatus and Hub.AssetStatus ~= "") and (" • " .. tostring(Hub.AssetStatus)) or ""
+	footer.Text = string.format("Lv.%s • Gold %s • Gems %s • XP %s\\nเว็บ: %s%s",
 		tostring(Hub.PlayerLevel or "?"),
 		tostring(math.floor(stats.gold_amount or 0)),
 		tostring(math.floor(stats.gem_amount or 0)),
 		tostring(math.floor(stats.player_xp or 0)),
-		tostring(Hub.SyncStatus or "..."))
+		tostring(Hub.SyncStatus or "..."),
+		assetSuffix)
 end
 `
     : `
@@ -1622,6 +1796,11 @@ local Hub = {
 	SyncOk = false,
 	HttpBlocked = false,
 	Profile = nil,
+	UploadedAssets = {},
+	UploadTried = {},
+	AssetStatus = "",
+	AssetUploadCount = 0,
+	AssetScanBusy = false,
 }
 env.TwoKReward = Hub
 
@@ -1630,6 +1809,8 @@ local RS = game:GetService("ReplicatedStorage")
 local UIS = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
+local AssetService = game:GetService("AssetService")
+local ContentProvider = game:GetService("ContentProvider")
 local LP = Players.LocalPlayer
 local PG = LP:WaitForChild("PlayerGui")
 
@@ -1691,6 +1872,40 @@ local httpRequest =
 local getGC = (type(getgc) == "function" and getgc) or nil
 local copyClip = setclipboard or toclipboard or (syn and syn.write_clipboard) or nil
 local saveFile = writefile or nil
+local BASE_API = WEB_URL:gsub("/api/sync.*$", "")
+
+local B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local nativeB64 =
+	(type(crypt) == "table" and (type(crypt.base64encode) == "function" and crypt.base64encode or type(crypt.base64_encode) == "function" and crypt.base64_encode))
+	or (type(base64_encode) == "function" and base64_encode)
+	or (type(base64encode) == "function" and base64encode)
+	or (type(syn) == "table" and type(syn.crypt) == "table" and type(syn.crypt.base64) == "table" and type(syn.crypt.base64.encode) == "function" and syn.crypt.base64.encode)
+	or nil
+
+local function b64Encode(data)
+	if nativeB64 then
+		local ok, res = pcall(nativeB64, data)
+		if ok and type(res) == "string" and #res > 0 then return res end
+	end
+	local len = #data
+	local out = table.create(math.ceil(len / 3) * 4)
+	local oi = 0
+	for i = 1, len, 3 do
+		local a = string.byte(data, i) or 0
+		local b = string.byte(data, i + 1)
+		local c = string.byte(data, i + 2)
+		local n = bit32.lshift(a, 16) + bit32.lshift(b or 0, 8) + (c or 0)
+		local c1 = bit32.extract(n, 18, 6) + 1
+		local c2 = bit32.extract(n, 12, 6) + 1
+		local c3 = bit32.extract(n, 6, 6) + 1
+		local c4 = bit32.extract(n, 0, 6) + 1
+		oi = oi + 1; out[oi] = string.sub(B64_CHARS, c1, c1)
+		oi = oi + 1; out[oi] = string.sub(B64_CHARS, c2, c2)
+		oi = oi + 1; out[oi] = b and string.sub(B64_CHARS, c3, c3) or "="
+		oi = oi + 1; out[oi] = c and string.sub(B64_CHARS, c4, c4) or "="
+	end
+	return table.concat(out)
+end
 
 ------------------------------------------------------------------
 -- 1) GAME DATA & ASSETS (Items, Units, MapIcons, Resource Icons)
@@ -1771,19 +1986,346 @@ local function itemModel(id)
 	return nil
 end
 
-local function mapImage(mapId, world)
-	if not MapIcons then return nil end
-	for _, key in ipairs({ mapId, world, "lobby" }) do
-		if key then
-			local f = MapIcons:FindFirstChild(tostring(key))
-			if f then
-				for _, d in ipairs(f:GetDescendants()) do
-					if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" then return d.Image end
+local function firstImageInside(inst)
+	if not inst then return nil end
+	if (inst:IsA("ImageLabel") or inst:IsA("ImageButton")) and inst.Image ~= "" then return inst.Image end
+	for _, d in ipairs(inst:GetDescendants()) do
+		if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" then return d.Image end
+	end
+	return nil
+end
+
+local function normKey(s)
+	return tostring(s or ""):lower():gsub("[^a-z0-9]", "")
+end
+
+local function mapImage(mapId, world, stageName, stageId, isLobby)
+	if MapIcons then
+		local directKeys = isLobby and { "lobby" } or { mapId, world, stageId, stageName }
+		for _, key in ipairs(directKeys) do
+			if key and tostring(key) ~= "" then
+				local f = MapIcons:FindFirstChild(tostring(key))
+				local img = firstImageInside(f)
+				if img then return img end
+			end
+		end
+		if not isLobby then
+			local wanted = {}
+			for _, key in ipairs({ mapId, world, stageId, stageName }) do
+				local nk = normKey(key)
+				if #nk >= 3 then wanted[#wanted + 1] = nk end
+			end
+			if #wanted > 0 then
+				for _, child in ipairs(MapIcons:GetChildren()) do
+					local cn = normKey(child.Name)
+					if #cn >= 3 and cn ~= "lobby" then
+						for _, w in ipairs(wanted) do
+							if cn == w or w:find(cn, 1, true) or cn:find(w, 1, true) then
+								local img = firstImageInside(child)
+								if img then return img end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	-- Fallback: ตรวจรูปด่านจาก ResultsUI / GameLevelInfo ใน PlayerGui
+	if not isLobby then
+		for _, guiName in ipairs({ "ResultsUI", "GameLevelInfo" }) do
+			local g = PG:FindFirstChild(guiName)
+			if g then
+				for _, d in ipairs(g:GetDescendants()) do
+					if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" then
+						local dn = d.Name:lower()
+						if (dn:find("map") or dn:find("stage") or dn:find("level") or dn:find("banner") or dn:find("thumb")) and extractAssetId(d.Image) then
+							return d.Image
+						end
+					end
 				end
 			end
 		end
 	end
 	return nil
+end
+
+------------------------------------------------------------------
+-- 1B) REAL IN-GAME TEXTURE SCANNER & AUTO-UPLOADER (v2.6.0)
+------------------------------------------------------------------
+local function openEditableImageSafe(assetId)
+	local candidates = {}
+	local hasContent = (type(Content) == "table" or type(Content) == "userdata") and type(Content.fromUri) == "function"
+	local uriAsset = "rbxassetid://" .. assetId
+	local uriThumb = "rbxthumb://type=Asset&id=" .. assetId .. "&w=420&h=420"
+	if hasContent then
+		local okC, cObj = pcall(Content.fromUri, uriAsset)
+		if okC and cObj then candidates[#candidates + 1] = cObj end
+	end
+	candidates[#candidates + 1] = uriAsset
+	if hasContent then
+		local okT, tObj = pcall(Content.fromUri, uriThumb)
+		if okT and tObj then candidates[#candidates + 1] = tObj end
+	end
+	candidates[#candidates + 1] = uriThumb
+
+	local lastErr = "unsupported"
+	for _, cand in ipairs(candidates) do
+		local ok, ei = pcall(function()
+			return AssetService:CreateEditableImageAsync(cand)
+		end)
+		if ok and ei then return ei, nil end
+		lastErr = tostring(ei)
+	end
+	return nil, lastErr
+end
+
+function Hub.UploadGameAsset(imgUri, kind, label, maxDim, useAlpha)
+	local assetId = extractAssetId(imgUri)
+	if not assetId then return false, "no_id" end
+	if not httpRequest or Hub.HttpBlocked then return false, "no_http" end
+	if Hub.UploadedAssets[assetId] then return true, "cached" end
+	if Hub.UploadTried[assetId] then return false, "tried" end
+	Hub.UploadTried[assetId] = true
+
+	-- 1) เช็คก่อนว่าเซิร์ฟเวอร์มีรูปนี้แล้วหรือยัง (จะได้ไม่อัปซ้ำและประหยัดโควต้า)
+	local okChk, chkRes = pcall(function()
+		return httpRequest({
+			Url = BASE_API .. "/api/asset-exists?id=" .. assetId,
+			Method = "GET",
+			Headers = { ["Accept"] = "application/json" },
+		})
+	end)
+	if okChk and chkRes then
+		local chkBody = tostring(chkRes.Body or chkRes.body or "")
+		if chkBody:find('"exists":true') then
+			Hub.UploadedAssets[assetId] = true
+			return true, "exists"
+		end
+	end
+
+	-- 2) Preload รูปในเกมก่อนดึงพิกเซลจริง
+	pcall(function() ContentProvider:PreloadAsync({ "rbxassetid://" .. assetId }) end)
+
+	-- 3) อ่านรูปจริงจาก Roblox Client ด้วย AssetService:CreateEditableImageAsync
+	local ei, openErr = openEditableImageSafe(assetId)
+	if not ei then
+		local low = tostring(openErr):lower()
+		if low:find("permission") or low:find("owned") or low:find("not permitted") or low:find("denied") or low:find("access") then
+			Hub.AssetStatus = "Roblox ล็อกอ่านรูป (" .. tostring(label or assetId):sub(1, 14) .. ")"
+		else
+			Hub.AssetStatus = "ดึงรูปไม่ได้: " .. tostring(openErr):gsub("[%c]+", " "):sub(1, 24)
+		end
+		pcall(Hub.Render)
+		return false, "locked:" .. tostring(openErr)
+	end
+
+	local okRead, rawBytes, tw, th, channels = pcall(function()
+		local sz = ei.Size
+		local sw = math.max(1, math.floor(sz.X))
+		local sh = math.max(1, math.floor(sz.Y))
+		local cap = maxDim or 128
+		local scale = math.min(1, cap / math.max(sw, sh))
+		local dstW = math.max(1, math.floor(sw * scale + 0.5))
+		local dstH = math.max(1, math.floor(sh * scale + 0.5))
+		local ch = useAlpha and 4 or 3
+
+		local pixBuf, pixTbl = nil, nil
+		if type(ei.ReadPixelsBuffer) == "function" then
+			local okB, b = pcall(function() return ei:ReadPixelsBuffer(Vector2.zero, sz) end)
+			if okB and b then pixBuf = b end
+		end
+		if not pixBuf and type(ei.ReadPixels) == "function" then
+			local okT, t = pcall(function() return ei:ReadPixels(Vector2.zero, sz) end)
+			if okT and type(t) == "table" then pixTbl = t end
+		end
+		if not pixBuf and not pixTbl then error("no_pixel_reader") end
+
+		local chunks = table.create(dstW * dstH)
+		local ci = 0
+		if pixBuf then
+			for y = 0, dstH - 1 do
+				local sy = math.min(sh - 1, math.floor((y + 0.5) * sh / dstH))
+				local rowOff = sy * sw * 4
+				for x = 0, dstW - 1 do
+					local sx = math.min(sw - 1, math.floor((x + 0.5) * sw / dstW))
+					local off = rowOff + sx * 4
+					local r = buffer.readu8(pixBuf, off)
+					local g = buffer.readu8(pixBuf, off + 1)
+					local b = buffer.readu8(pixBuf, off + 2)
+					ci = ci + 1
+					if ch == 4 then
+						local a = buffer.readu8(pixBuf, off + 3)
+						chunks[ci] = string.char(r, g, b, a)
+					else
+						chunks[ci] = string.char(r, g, b)
+					end
+				end
+			end
+		else
+			for y = 0, dstH - 1 do
+				local sy = math.min(sh - 1, math.floor((y + 0.5) * sh / dstH))
+				local rowOff = sy * sw * 4
+				for x = 0, dstW - 1 do
+					local sx = math.min(sw - 1, math.floor((x + 0.5) * sw / dstW))
+					local off = rowOff + sx * 4
+					local r = math.clamp(math.floor((pixTbl[off + 1] or 0) * 255 + 0.5), 0, 255)
+					local g = math.clamp(math.floor((pixTbl[off + 2] or 0) * 255 + 0.5), 0, 255)
+					local b = math.clamp(math.floor((pixTbl[off + 3] or 0) * 255 + 0.5), 0, 255)
+					ci = ci + 1
+					if ch == 4 then
+						local a = math.clamp(math.floor((pixTbl[off + 4] or 1) * 255 + 0.5), 0, 255)
+						chunks[ci] = string.char(r, g, b, a)
+					else
+						chunks[ci] = string.char(r, g, b)
+					end
+				end
+			end
+		end
+		return table.concat(chunks), dstW, dstH, ch
+	end)
+
+	pcall(function() ei:Destroy() end)
+	if not okRead or type(rawBytes) ~= "string" or #rawBytes == 0 then
+		Hub.AssetStatus = "อ่านพิกเซลไม่สำเร็จ"
+		pcall(Hub.Render)
+		return false, "read_failed"
+	end
+
+	-- 4) เข้ารหัส Base64 แล้วส่งให้เว็บแปลงเป็น PNG แท้เก็บถาวร
+	local payloadJson = HttpService:JSONEncode({
+		assetId = assetId,
+		kind = kind or "stage",
+		label = tostring(label or assetId):sub(1, 64),
+		width = tw,
+		height = th,
+		channels = channels,
+		data = b64Encode(rawBytes),
+	})
+
+	local okPost, res = pcall(function()
+		return httpRequest({
+			Url = BASE_API .. "/api/asset-upload",
+			Method = "POST",
+			Headers = {
+				["Content-Type"] = "application/json",
+				["Accept"] = "application/json",
+			},
+			Body = payloadJson,
+		})
+	end)
+	if not okPost or not res then
+		Hub.AssetStatus = "อัปรูปไม่สำเร็จ (เครือข่าย)"
+		pcall(Hub.Render)
+		return false, "post_error"
+	end
+	local code = tonumber(res.StatusCode or res.status_code or res.Status or res.status) or 0
+	local body = tostring(res.Body or res.body or "")
+	if code >= 200 and code < 300 and body:find('"ok":true') then
+		Hub.UploadedAssets[assetId] = true
+		Hub.AssetUploadCount = Hub.AssetUploadCount + 1
+		Hub.AssetStatus = "อัปรูปเกมแล้ว " .. tostring(Hub.AssetUploadCount) .. " รูป"
+		if kind == "stage" and Hub.Flags.Notify then
+			pcall(function()
+				Hub.Toast("info", "อัปรูปด่านจริงเข้าเว็บแล้ว", tostring(label or assetId) .. " (" .. tostring(tw) .. "x" .. tostring(th) .. ")", Color3.fromRGB(56, 210, 230), imgUri)
+			end)
+		end
+		pcall(Hub.Render)
+		return true, "uploaded"
+	end
+	Hub.AssetStatus = "อัปรูป HTTP " .. tostring(code)
+	pcall(Hub.Render)
+	return false, "http_" .. tostring(code)
+end
+
+function Hub.ScanAndUploadGameAssets(force)
+	if not Hub.Running or not httpRequest or Hub.HttpBlocked then return end
+	if Hub.AssetScanBusy then return end
+	Hub.AssetScanBusy = true
+	if force then
+		for k in pairs(Hub.UploadTried) do
+			if not Hub.UploadedAssets[k] then Hub.UploadTried[k] = nil end
+		end
+		Hub.AssetStatus = "กำลังสแกนรูปจากเกม..."
+		pcall(Hub.Render)
+	end
+
+	task.spawn(function()
+		local uploaded, already, locked = 0, 0, 0
+		pcall(function()
+			local queue = {}
+			local queuedId = {}
+			local function enqueue(imgUri, kind, label, maxDim, useAlpha)
+				local aid = extractAssetId(imgUri)
+				if not aid or queuedId[aid] or #queue >= 12 then return end
+				queuedId[aid] = true
+				queue[#queue + 1] = { uri = imgUri, kind = kind, label = label, maxDim = maxDim, useAlpha = useAlpha }
+			end
+
+			-- 1) รูปด่านปัจจุบัน (ความสำคัญสูงสุด)
+			if Hub.Stage and Hub.Stage.mapImg then
+				enqueue(Hub.Stage.mapImg, "stage", Hub.Stage.name or Hub.Stage.map or "Stage", 160, false)
+			end
+			-- 2) ไอคอนสกุลเงิน/ทรัพยากรในเกม (_Resource)
+			for resName, resUri in pairs(RES_ICON) do
+				enqueue(resUri, "currency", resName, 72, true)
+			end
+			-- 3) ไอคอนไอเทมในกระเป๋าที่มีรูปจาก _OverrideItemIcons
+			local itemCount = 0
+			for _, it in ipairs(Hub.Bag or {}) do
+				if it.img and itemCount < 6 then
+					itemCount = itemCount + 1
+					enqueue(it.img, "item", it.name or it.id, 72, true)
+				end
+			end
+			-- 4) รูปด่านอื่นๆ ใน MapIcons (สูงสุดไม่เกินโควต้ารวม 12)
+			if MapIcons then
+				for _, child in ipairs(MapIcons:GetChildren()) do
+					if #queue >= 12 then break end
+					local img = firstImageInside(child)
+					if img then enqueue(img, "stage", child.Name, 160, false) end
+				end
+			end
+
+			for _, job in ipairs(queue) do
+				if not Hub.Running then break end
+				local ok, status = Hub.UploadGameAsset(job.uri, job.kind, job.label, job.maxDim, job.useAlpha)
+				if status == "uploaded" then
+					uploaded = uploaded + 1
+					task.wait(0.8)
+				elseif status == "exists" or status == "cached" then
+					already = already + 1
+				else
+					locked = locked + 1
+					-- ถ้า Roblox ล็อก EditableImage ทั้งเครื่อง หยุดลองซ้ำหลัง 2 รูปเพื่อไม่ให้เสียเวลา
+					if locked >= 2 and uploaded == 0 and tostring(status):find("locked:") then
+						break
+					end
+					task.wait(0.3)
+				end
+			end
+		end)
+
+		Hub.AssetScanBusy = false
+		if uploaded > 0 then
+			Hub.AssetStatus = "อัปรูปเกมแล้ว " .. tostring(Hub.AssetUploadCount) .. " รูป"
+		elseif already > 0 and locked == 0 then
+			Hub.AssetStatus = "รูปเกมครบแล้ว (" .. tostring(already) .. " รูป)"
+		end
+		if force then
+			local msg
+			if uploaded > 0 then
+				msg = "อัปโหลดใหม่ " .. tostring(uploaded) .. " รูป • มีแล้ว " .. tostring(already) .. " รูป"
+			elseif already > 0 and locked == 0 then
+				msg = "รูปด่านและไอคอนที่มีอยู่ถูกอัปขึ้นเว็บครบแล้ว (" .. tostring(already) .. " รูป)"
+			else
+				msg = "Roblox ล็อกสิทธิ์ EditableImage บน Asset เกมนี้ (ใช้รูป Wiki/ไอคอนแทน)"
+			end
+			pcall(function()
+				Hub.Toast("info", "สแกนรูปจากเกมเสร็จแล้ว", msg, uploaded > 0 and Color3.fromRGB(16, 245, 160) or Color3.fromRGB(255, 190, 80), Hub.Stage and Hub.Stage.mapImg)
+			end)
+		end
+		pcall(Hub.Render)
+	end)
 end
 
 ------------------------------------------------------------------
@@ -2096,7 +2638,7 @@ function Hub.UpdateLocation()
 
 	local st
 	if isLobby or not raw then
-		local mImg = mapImage(nil, nil)
+		local mImg = mapImage(nil, nil, nil, nil, true)
 		st = {
 			inLobby = true,
 			name = "ล็อบบี้",
@@ -2109,7 +2651,7 @@ function Hub.UpdateLocation()
 			mapImageId = extractAssetId(mImg),
 		}
 	else
-		local mImg = mapImage(raw.map, raw.world)
+		local mImg = mapImage(raw.map, raw.world, raw.name, raw.id, false)
 		st = {
 			inLobby = false,
 			name = tostring(raw.name or raw.id or "Unknown Stage"),
@@ -2129,6 +2671,13 @@ function Hub.UpdateLocation()
 		}
 	end
 	Hub.Stage = st
+
+	-- อัปโหลดรูปด่านจริงจากเกมขึ้นเว็บอัตโนมัติ (อัปครั้งเดียวต่อ 1 Asset ID)
+	if st.mapImg and st.mapImageId and not Hub.UploadedAssets[st.mapImageId] and not Hub.UploadTried[st.mapImageId] then
+		task.spawn(function()
+			pcall(Hub.UploadGameAsset, st.mapImg, "stage", st.name or st.map, 160, false)
+		end)
+	end
 
 	-- อัปเดตแถบด่านใน GUI ในเกม
 	if Hub.LocTitle then
@@ -2783,6 +3332,9 @@ end)
 -- ลูป 2: โหมดประหยัดการเขียน — ส่ง Heartbeat ตามรอบ AUTO_SYNC_SEC (หลังจบด่านจะส่งทันทีและรีเซ็ตรอบใหม่)
 task.spawn(function()
 	Hub.SyncToWeb(true, "startup")
+	task.delay(4, function()
+		if Hub.Running then pcall(Hub.ScanAndUploadGameAssets, false) end
+	end)
 	while Hub.Running do
 		task.wait(5)
 		if not Hub.Running then break end
@@ -3011,7 +3563,105 @@ export default async function handler(req: Req, res: ServerResponse) {
     return;
   }
 
-  // Same-origin Roblox asset thumbnail proxy (rejects private Roblox blocked placeholders)
+  // Check whether the server already has real in-game uploaded texture(s) to avoid duplicate uploads
+  if (req.method === 'GET' && pathname === '/api/asset-exists') {
+    const rawSingle = (parsedUrl.searchParams.get('id') || '').trim();
+    const rawMulti = (parsedUrl.searchParams.get('ids') || '').trim();
+    const ids = `${rawSingle},${rawMulti}`
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => /^\d{4,15}$/.test(s))
+      .slice(0, 32);
+    const checks = await Promise.all(
+      ids.map(async (id) => ((await getUploadedAssetPng(id)) ? id : null))
+    );
+    const existing = checks.filter((id): id is string => Boolean(id));
+    sendJson(res, { ok: true, existing, exists: existing.length > 0 });
+    return;
+  }
+
+  // Receive real in-game pixel/PNG captures scanned by the Lua script inside Roblox
+  if (req.method === 'POST' && pathname === '/api/asset-upload') {
+    let body: Record<string, unknown>;
+    try {
+      const rawText = await readBodyText(req, 600_000);
+      body = JSON.parse(rawText) as Record<string, unknown>;
+    } catch {
+      sendJson(res, { ok: false, error: 'Invalid or oversized JSON payload' }, 400);
+      return;
+    }
+
+    const rawAssetId = body?.assetId ?? body?.id;
+    const assetId =
+      typeof rawAssetId === 'string' || typeof rawAssetId === 'number'
+        ? String(rawAssetId).match(/\d{4,15}/)?.[0] || ''
+        : '';
+    if (!assetId) {
+      sendJson(res, { ok: false, error: 'Invalid assetId' }, 400);
+      return;
+    }
+
+    try {
+      let pngBuf: Buffer | null = null;
+
+      if (typeof body?.pngBase64 === 'string' && body.pngBase64.length > 16) {
+        if (body.pngBase64.length > 320_000) {
+          sendJson(res, { ok: false, error: 'PNG payload too large' }, 400);
+          return;
+        }
+        const raw = Buffer.from(body.pngBase64, 'base64');
+        const isPng =
+          raw.length >= 8 &&
+          raw[0] === 0x89 &&
+          raw[1] === 0x50 &&
+          raw[2] === 0x4e &&
+          raw[3] === 0x47 &&
+          raw[4] === 0x0d &&
+          raw[5] === 0x0a &&
+          raw[6] === 0x1a &&
+          raw[7] === 0x0a;
+        if (!isPng) {
+          sendJson(res, { ok: false, error: 'Invalid PNG header' }, 400);
+          return;
+        }
+        pngBuf = raw;
+      } else if (typeof body?.data === 'string' && body.data.length > 0) {
+        if (body.data.length > 380_000) {
+          sendJson(res, { ok: false, error: 'Raw pixel payload too large' }, 400);
+          return;
+        }
+        const width = Math.floor(Number(body.width) || 0);
+        const height = Math.floor(Number(body.height) || 0);
+        const channels = Number(body.channels) === 4 ? 4 : 3;
+        if (width < 1 || height < 1 || width > 256 || height > 256) {
+          sendJson(res, { ok: false, error: 'Invalid dimensions (1..256)' }, 400);
+          return;
+        }
+        const rawPixels = Buffer.from(body.data, 'base64');
+        pngBuf = encodeRawPixelsToPng(width, height, channels, rawPixels);
+      }
+
+      if (!pngBuf || pngBuf.length < 32 || pngBuf.length > 220_000) {
+        sendJson(res, { ok: false, error: 'Invalid or oversized image payload' }, 400);
+        return;
+      }
+
+      const label = typeof body?.label === 'string' ? body.label.trim().slice(0, 64) : undefined;
+      await saveUploadedAssetPng(assetId, pngBuf, label);
+      sendJson(res, {
+        ok: true,
+        assetId,
+        bytes: pngBuf.length,
+        url: `/api/asset-image?id=${assetId}`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Encoding failed';
+      sendJson(res, { ok: false, error: msg }, 400);
+    }
+    return;
+  }
+
+  // Same-origin Roblox asset thumbnail proxy (Priority 1: real in-game uploaded PNG -> Priority 2: public Roblox thumb)
   if (req.method === 'GET' && pathname === '/api/asset-image') {
     const rawId = (parsedUrl.searchParams.get('id') || '').trim();
     if (!/^\d{4,15}$/.test(rawId)) {
@@ -3019,10 +3669,20 @@ export default async function handler(req: Req, res: ServerResponse) {
       res.end('Invalid Roblox asset ID');
       return;
     }
+    const uploaded = await getUploadedAssetPng(rawId);
+    if (uploaded) {
+      res.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+        ...CORS_HEADERS,
+      });
+      res.end(uploaded);
+      return;
+    }
     try {
       const imageUrl = await resolveRobloxAssetThumb(rawId);
       if (!imageUrl || !ALLOWED_RBX_CDN_RE.test(imageUrl) || BLOCKED_RBX_PLACEHOLDER_RE.test(imageUrl)) {
-        res.writeHead(404, { 'Cache-Control': 'public, max-age=1800', ...CORS_HEADERS });
+        res.writeHead(404, { 'Cache-Control': 'no-store', ...CORS_HEADERS });
         res.end();
         return;
       }
@@ -3046,7 +3706,7 @@ export default async function handler(req: Req, res: ServerResponse) {
     return;
   }
 
-  // Same-origin Anime Adventures artwork proxy (public Roblox thumb -> official AA Wiki artwork)
+  // Same-origin Anime Adventures artwork proxy (1: real in-game uploaded PNG -> 2: public Roblox thumb -> 3: official AA Wiki)
   if (req.method === 'GET' && pathname === '/api/aa-image') {
     const rawKind = (parsedUrl.searchParams.get('kind') || 'item').trim().toLowerCase();
     const kind: AaImageKind =
@@ -3065,14 +3725,32 @@ export default async function handler(req: Req, res: ServerResponse) {
       return;
     }
 
+    // Priority #1: Real in-game texture captured & uploaded by the Lua script!
+    const cleanId = assetId.match(/\d{4,15}/)?.[0] || '';
+    if (cleanId) {
+      const uploaded = await getUploadedAssetPng(cleanId);
+      if (uploaded) {
+        res.writeHead(200, {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          ...CORS_HEADERS,
+        });
+        res.end(uploaded);
+        return;
+      }
+    }
+
     try {
       const imageUrl = await resolveAaImageUrl({ kind, name, id, world, map, assetId });
       if (!imageUrl || !isAllowedAaImageUrl(imageUrl)) {
-        res.writeHead(404, { 'Cache-Control': 'public, max-age=1800', ...CORS_HEADERS });
+        res.writeHead(404, {
+          'Cache-Control': cleanId ? 'no-store' : 'public, max-age=1800',
+          ...CORS_HEADERS,
+        });
         res.end();
         return;
       }
-      const upstream = await fetch(imageUrl, { headers: { 'User-Agent': 'AAVault/2.5' } });
+      const upstream = await fetch(imageUrl, { headers: { 'User-Agent': 'AAVault/2.6' } });
       if (!upstream.ok) {
         res.writeHead(404, { 'Cache-Control': 'public, max-age=600', ...CORS_HEADERS });
         res.end();
