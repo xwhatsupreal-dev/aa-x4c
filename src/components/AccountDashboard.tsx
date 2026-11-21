@@ -583,7 +583,7 @@ export function AccountDashboard({
               <span>
                 {online
                   ? account.syncIntervalSec
-                    ? `ออนไลน์ · ทุก ${account.syncIntervalSec} วิ`
+                    ? `ออนไลน์ · เช็คทุก ${account.syncIntervalSec} วิ`
                     : 'ออนไลน์'
                   : 'ออฟไลน์'}
               </span>
@@ -867,7 +867,7 @@ export function AccountDashboard({
             <Monitor size={13} className="shrink-0 text-zinc-500" />
             <span className="truncate font-mono text-[11px]">
               {account.scriptVersion ? `v${account.scriptVersion}` : storageLabel}
-              {account.syncIntervalSec ? ` · ${account.syncIntervalSec}s` : ` · ${syncKey}`}
+              {account.syncIntervalSec ? ` · เช็คทุก ${account.syncIntervalSec} วิ` : ` · ${syncKey}`}
             </span>
           </span>
           <span

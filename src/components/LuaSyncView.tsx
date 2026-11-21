@@ -618,11 +618,11 @@ export function LuaSyncView({
           <p className="flex items-start gap-2 text-xs text-zinc-400">
             <Activity size={14} className="text-[#10F5A0] shrink-0 mt-0.5" />
             <span>
-              <strong className="text-[#10F5A0]">โหมดประหยัดการเขียน:</strong> ส่งเช็คออนไลน์ทุก{' '}
+              <strong className="text-[#10F5A0]">แจ้งทันทีเฉพาะตอนจบด่าน:</strong> เมื่อจบด่านจะส่งสรุปของดรอปขึ้นเว็บทันที
+              · ส่วนข้อมูลอื่น (เปลี่ยนด่าน/ออนไลน์/กระเป๋า) จะรอเช็คทุก{' '}
               <strong className="text-zinc-200">{formatDurationLabel(intervalSec)}</strong>{' '}
               (~<strong className="text-zinc-200">{estimatedDailyWrites.toLocaleString('th-TH')} ครั้ง/วัน</strong> ต่อ 1 ไอดี)
-              · หากมี<strong className="text-zinc-200">ของดรอปใหม่หลังจบด่านจะรวมส่งทันทีภายใน 3 วิ</strong>{' '}
-              (ไม่ต้องรอครบรอบ) และสลับเป็นออฟไลน์เมื่อเงียบเกิน ~{formatDurationLabel(offlineTimeoutSec)}
+              และสลับเป็นออฟไลน์เมื่อเงียบเกิน ~{formatDurationLabel(offlineTimeoutSec)}
             </span>
           </p>
 

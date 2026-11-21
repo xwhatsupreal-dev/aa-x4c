@@ -1900,7 +1900,7 @@ function Hub.UpdateLocation()
 		if Hub.LocImg then Hub.LocImg.Image = st.mapImg or "" end
 	end
 
-	-- เมื่อเปลี่ยนด่าน (เช่น ออกจากล็อบบี้เข้าด่านใหม่) ให้รีเซ็ตฐานนับของดรอปและซิงค์ชื่อด่านขึ้นเว็บทันที
+	-- เมื่อเปลี่ยนด่าน (เช่น ออกจากล็อบบี้เข้าด่านใหม่) ให้รีเซ็ตฐานนับของดรอปไว้ในเครื่อง (รอซิงค์ตามรอบเวลา AUTO_SYNC_SEC หรือเมื่อจบด่าน)
 	local sig = tostring(st.inLobby) .. "|" .. tostring(st.name) .. "|" .. tostring(st.difficulty or "")
 	if lastStageSignature ~= nil and sig ~= lastStageSignature then
 		if not st.inLobby then
@@ -1909,11 +1909,6 @@ function Hub.UpdateLocation()
 			Hub.PendingDrops = {}
 			Hub.ResultsSeen = false
 		end
-		task.delay(1.5, function()
-			if Hub.Running and Hub.Flags.WebSync and not Hub.HttpBlocked then
-				pcall(Hub.SyncToWeb, true, "stage_change")
-			end
-		end)
 	end
 	lastStageSignature = sig
 	return st
@@ -2082,7 +2077,19 @@ function Hub.SyncToWeb(force, reason)
 		pcall(Hub.Render)
 		return
 	end
-	if Hub.SyncInFlight and (os.clock() - Hub.SyncStartedAt) < 20 then return end
+	local isStageClear = (reason == "stage_clear" or reason == "game_finished" or reason == "results_ui")
+	if Hub.SyncInFlight and (os.clock() - Hub.SyncStartedAt) < 20 then
+		if not isStageClear then return end
+		task.spawn(function()
+			local waited = 0
+			while Hub.SyncInFlight and waited < 5 and Hub.Running do
+				task.wait(0.25)
+				waited = waited + 0.25
+			end
+			if Hub.Running then Hub.SyncToWeb(true, reason) end
+		end)
+		return
+	end
 	if not force and (os.clock() - Hub.LastSync) < AUTO_SYNC_SEC then return end
 	Hub.SyncInFlight = true
 	Hub.SyncStartedAt = os.clock()
@@ -2125,7 +2132,7 @@ function Hub.SyncToWeb(force, reason)
 						pcall(function() Hub.Toast("info", "มีสคริปต์ใหม่ v" .. latestVer, "รันคำสั่ง 1 บรรทัดใหม่ได้เลย", Color3.fromRGB(255, 100, 165), nil) end)
 					end
 				else
-					Hub.SyncStatus = "ออนไลน์ • โหมดประหยัด " .. AUTO_SYNC_SEC .. " วิ (#" .. Hub.SyncCount .. " • " .. clock() .. ")"
+					Hub.SyncStatus = "ออนไลน์ • เช็คทุก " .. AUTO_SYNC_SEC .. " วิ (#" .. Hub.SyncCount .. " • " .. clock() .. ")"
 				end
 			elseif code == 302 or code == 401 or code == 403 or body:find("cookie_check") or body:find("accounts.google.com") then
 				Hub.SyncOk = false
@@ -2270,8 +2277,8 @@ local function flushStageClearRewards(triggerSource)
 	Hub.ResultsSeen = true
 
 	task.spawn(function()
-		-- รอ 1.9 วินาทีให้ ResultsUI + _stats + _resource* + profile.resources + กระเป๋าอัปเดตครบทุกชิ้น
-		task.wait(1.9)
+		-- รอ 1.2 วินาทีให้ ResultsUI + _stats + _resource* + profile.resources + กระเป๋าอัปเดตครบ แล้วแจ้งส่งขึ้นเว็บทันที
+		task.wait(1.2)
 		pcall(function()
 			pcall(Hub.UpdateLocation)
 			local g = PG:FindFirstChild("ResultsUI")
@@ -2528,23 +2535,31 @@ local function flushStageClearRewards(triggerSource)
 				Hub.Tab = "reward"
 				pcall(Hub.Render)
 
-				-- อัปโหลดรูปด่านที่เพิ่งจบ + รูปของรางวัลทุกชิ้น (รวม Summer Pearls / Gold / Gems / Charm / Portal) ขึ้นเว็บก่อนซิงค์
-				if httpRequest and not Hub.HttpBlocked then
-					if st.mapImg and st.mapImageId and not Hub.UploadedAssets[st.mapImageId] then
-						Hub.UploadTried[st.mapImageId] = nil
-						pcall(Hub.UploadGameAsset, st.mapImg, "stage", stageName or st.map, 160, false)
-					end
-					local uploadedThisClear = 0
-					for _, b in ipairs(bundle) do
-						if b.img and b.iconId and not Hub.UploadedAssets[b.iconId] and uploadedThisClear < 10 then
-							Hub.UploadTried[b.iconId] = nil
-							local okUp = pcall(Hub.UploadGameAsset, b.img, b.kind or "item", b.name or b.id, 72, true)
-							if okUp then uploadedThisClear = uploadedThisClear + 1 end
-						end
-					end
-				end
-
+				-- ส่งสรุปจบด่านขึ้นเว็บทันทีโดยไม่รอคิวอัปโหลดรูป
 				Hub.SyncToWeb(true, triggerSource or "stage_clear")
+
+				-- อัปโหลดรูปด่านที่เพิ่งจบ + รูปของรางวัลที่ยังไม่มีแคชแบบคู่ขนานเบื้องหลัง
+				if httpRequest and not Hub.HttpBlocked then
+					local stageImgCopy, stageIdCopy, stageLblCopy = st.mapImg, st.mapImageId, (stageName or st.map)
+					local bundleCopy = {}
+					for _, b in ipairs(bundle) do
+						bundleCopy[#bundleCopy + 1] = { img = b.img, iconId = b.iconId, kind = b.kind, name = b.name, id = b.id }
+					end
+					task.spawn(function()
+						if stageImgCopy and stageIdCopy and not Hub.UploadedAssets[stageIdCopy] then
+							Hub.UploadTried[stageIdCopy] = nil
+							pcall(Hub.UploadGameAsset, stageImgCopy, "stage", stageLblCopy, 160, false)
+						end
+						local uploadedThisClear = 0
+						for _, b in ipairs(bundleCopy) do
+							if b.img and b.iconId and not Hub.UploadedAssets[b.iconId] and uploadedThisClear < 10 then
+								Hub.UploadTried[b.iconId] = nil
+								local okUp = pcall(Hub.UploadGameAsset, b.img, b.kind or "item", b.name or b.id, 72, true)
+								if okUp then uploadedThisClear = uploadedThisClear + 1 end
+							end
+						end
+					end)
+				end
 			end
 		end)
 		Hub.FinishInFlight = false
@@ -2751,6 +2766,6 @@ task.spawn(function()
 	end
 end)
 
-Hub.Toast("info", "2K AA Vault v" .. SCRIPT_VERSION .. " พร้อมทำงาน", tostring(Hub.Stage.name) .. " • ทีม " .. tostring(#Hub.TeamList) .. "/6 • โหมดประหยัด " .. AUTO_SYNC_SEC .. " วิ", Color3.fromRGB(16, 245, 160), Hub.Stage.mapImg)
+Hub.Toast("info", "2K AA Vault v" .. SCRIPT_VERSION .. " พร้อมทำงาน", tostring(Hub.Stage.name) .. " • ทีม " .. tostring(#Hub.TeamList) .. "/6 • เช็คทุก " .. AUTO_SYNC_SEC .. " วิ (จบด่านส่งทันที)", Color3.fromRGB(16, 245, 160), Hub.Stage.mapImg)
 `;
 }

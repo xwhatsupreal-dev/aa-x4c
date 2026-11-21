@@ -829,7 +829,7 @@ export default function App() {
                           <span className={online ? 'text-[#10F5A0]' : 'text-zinc-500'}>
                             {online
                               ? acc.syncIntervalSec
-                                ? `ออนไลน์ · ทุก ${acc.syncIntervalSec} วิ`
+                                ? `ออนไลน์ · เช็คทุก ${acc.syncIntervalSec} วิ`
                                 : 'ออนไลน์'
                               : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
                           </span>

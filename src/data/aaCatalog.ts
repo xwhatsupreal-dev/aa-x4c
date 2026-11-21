@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.7.0';
-export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 01:20 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.7.1';
+export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 02:00 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,14 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.7.1',
+    updatedAt: '22 พ.ย. 2569 · 02:00 น. (เวลาไทย)',
+    highlights: [
+      'ส่งแจ้งทันทีเฉพาะตอนจบด่าน (ไม่รอคิวอัปรูปและไม่ทิ้งรอบจบด่าน) ส่วนการเปลี่ยนด่าน/เข้าล็อบบี้/ข้อมูลทั่วไปจะรอส่งตามเวลาที่ตั้งในสคริปต์ (ประหยัดโควต้าเขียนมากขึ้น)',
+      'ปรับข้อความสถานะบนเว็บและในเกมเป็น "เช็คทุก X วิ" ให้เข้าใจง่ายตรงกันทุกจุด',
+    ],
+  },
   {
     version: '2.7.0',
     updatedAt: '22 พ.ย. 2569 · 01:20 น. (เวลาไทย)',
