@@ -11,19 +11,23 @@ import {
   History,
   LayoutGrid,
   List,
+  MapPin,
   Monitor,
   Package,
   Search,
   Share2,
   Sparkles,
+  Swords,
   Trash2,
   Trophy,
   X,
 } from 'lucide-react';
 import {
+  formatClock,
   formatCompact,
   formatNumber,
   formatRelativeTime,
+  formatThaiDateTime,
   isAccountOnline,
   isScriptOutdated,
   RARITY_META,
@@ -39,6 +43,7 @@ import type {
   TeamUnit,
 } from '../types.ts';
 import { ItemEmblem } from './ItemEmblem.tsx';
+import { RobloxAssetThumb } from './RobloxAssetThumb.tsx';
 import { RobloxAvatarStage } from './RobloxAvatarStage.tsx';
 import { RobloxHeadshot } from './RobloxHeadshot.tsx';
 
@@ -67,9 +72,19 @@ interface DropBatch {
   topRarity: Rarity;
   totalQty: number;
   entries: RewardEntry[];
+  runId?: string;
+  stageName?: string;
+  stageWorld?: string;
+  stageMap?: string;
+  stageDifficulty?: string;
+  stageGamemode?: string;
+  stageWaves?: string;
+  stageTimer?: string;
+  stageImageId?: string;
 }
 
 const SOURCE_INFO: Record<string, { label: string; short: string }> = {
+  stage_clear: { label: 'รางวัลจบด่าน', short: 'จบด่าน' },
   show_unit_and_item_rewards: { label: 'รางวัลจบด่าน', short: 'จบด่าน' },
   unit_added: { label: 'ได้รับยูนิตใหม่', short: 'ยูนิต' },
   unique_item_added: { label: 'ได้รับไอเทม Unique', short: 'Unique' },
@@ -160,7 +175,7 @@ export function AccountDashboard({
     [account.inventory]
   );
 
-  // Group drops that arrived within 15 seconds & same source into RollinShop-style event rows
+  // Group stage-clear drops by runId (1 completed stage run = 1 bundled row), falling back to 15s window for legacy rows
   const dropBatches = useMemo<DropBatch[]>(() => {
     const q = dropSearch.trim().toLowerCase();
     const filtered = account.rewards.filter((r) => {
@@ -169,17 +184,62 @@ export function AccountDashboard({
         return (
           r.name.toLowerCase().includes(q) ||
           r.id.toLowerCase().includes(q) ||
-          r.src.toLowerCase().includes(q)
+          r.src.toLowerCase().includes(q) ||
+          (r.stageName?.toLowerCase().includes(q) ?? false) ||
+          (r.stageWorld?.toLowerCase().includes(q) ?? false) ||
+          (r.stageDifficulty?.toLowerCase().includes(q) ?? false)
         );
       }
       return true;
     });
 
     const batches: DropBatch[] = [];
+    const runMap = new Map<string, DropBatch>();
+
     for (const r of filtered) {
+      if (r.runId) {
+        const existingBatch = runMap.get(r.runId);
+        if (existingBatch) {
+          existingBatch.entries.push(r);
+          existingBatch.totalQty += r.qty;
+          if (RARITY_RANK[r.rarity] > RARITY_RANK[existingBatch.topRarity]) {
+            existingBatch.topRarity = r.rarity;
+          }
+          if (!existingBatch.stageImageId && r.stageImageId) {
+            existingBatch.stageImageId = r.stageImageId;
+          }
+          continue;
+        }
+        const info = SOURCE_INFO[r.src] || { label: 'รางวัลจบด่าน', short: 'จบด่าน' };
+        const batch: DropBatch = {
+          id: `run-${r.runId}`,
+          ts: r.ts,
+          timeLabel: r.ts > 0 ? `${formatClock(r.ts)} น.` : r.t,
+          src: r.src,
+          srcLabel: info.label,
+          srcShort: info.short,
+          topRarity: r.rarity,
+          totalQty: r.qty,
+          entries: [r],
+          runId: r.runId,
+          stageName: r.stageName,
+          stageWorld: r.stageWorld,
+          stageMap: r.stageMap,
+          stageDifficulty: r.stageDifficulty,
+          stageGamemode: r.stageGamemode,
+          stageWaves: r.stageWaves,
+          stageTimer: r.stageTimer,
+          stageImageId: r.stageImageId,
+        };
+        runMap.set(r.runId, batch);
+        batches.push(batch);
+        continue;
+      }
+
       const prev = batches[batches.length - 1];
       const sameWindow =
         prev &&
+        !prev.runId &&
         prev.src === r.src &&
         Math.abs(prev.ts - r.ts) <= 15_000;
 
@@ -197,18 +257,42 @@ export function AccountDashboard({
         batches.push({
           id: `${r.ts}-${r.src}-${batches.length}`,
           ts: r.ts,
-          timeLabel: r.t,
+          timeLabel: r.ts > 0 ? `${formatClock(r.ts)} น.` : r.t,
           src: r.src,
           srcLabel: info.label,
           srcShort: info.short,
           topRarity: r.rarity,
           totalQty: r.qty,
           entries: [r],
+          stageName: r.stageName,
+          stageWorld: r.stageWorld,
+          stageMap: r.stageMap,
+          stageDifficulty: r.stageDifficulty,
+          stageGamemode: r.stageGamemode,
+          stageWaves: r.stageWaves,
+          stageTimer: r.stageTimer,
+          stageImageId: r.stageImageId,
         });
       }
     }
     return batches;
   }, [account.rewards, dropSearch, dropRarity]);
+
+  const stage = account.currentStage;
+  const extraStatPills = useMemo(() => {
+    const ex = account.extraStats;
+    if (!ex) return [];
+    const items: Array<{ label: string; value: number; accent: string }> = [
+      { label: 'Trait', value: ex.traitTokens ?? 0, accent: '#10F5A0' },
+      { label: 'Curse', value: ex.curseTokens ?? 0, accent: '#c084fc' },
+      { label: 'Rebirth', value: ex.rebirthTokens ?? 0, accent: '#f472b6' },
+      { label: 'Trophy', value: ex.trophies ?? 0, accent: '#fbbf24' },
+      { label: 'Resource', value: ex.resource ?? 0, accent: '#60a5fa' },
+      { label: 'XP', value: ex.playerXp ?? 0, accent: '#a78bfa' },
+      { label: 'Behelit', value: ex.behelitXp ?? 0, accent: '#fb7185' },
+    ];
+    return items.filter((item) => item.value > 0);
+  }, [account.extraStats]);
 
   // Sorted aggregated totals (for "ไอเท็มที่ได้รับ" tab)
   const sortedTotals = useMemo(() => {
@@ -256,6 +340,8 @@ export function AccountDashboard({
     setClearingDrops(true);
     try {
       await onClearDrops();
+    } catch {
+      // Error feedback is handled by parent toast
     } finally {
       setClearingDrops(false);
     }
@@ -396,6 +482,67 @@ export function AccountDashboard({
               </p>
             </div>
           </div>
+
+          {/* Current Stage Card with Real Roblox MapIcons Artwork */}
+          {stage && (
+            <div className="mt-3.5 rounded-2xl bg-[#10151A] border border-white/[0.08] p-2.5 flex items-center gap-3">
+              <div className="relative w-14 h-14 shrink-0 overflow-hidden rounded-xl bg-[#161C24] border border-white/[0.08]">
+                <RobloxAssetThumb
+                  assetId={stage.mapImageId}
+                  alt={stage.name}
+                  className="w-full h-full object-cover"
+                  fallback={
+                    <div className="w-full h-full flex items-center justify-center text-zinc-500">
+                      {stage.inLobby ? <MapPin size={20} /> : <Swords size={20} className="text-[#10F5A0]" />}
+                    </div>
+                  }
+                />
+                {!stage.inLobby && (stage.wave ?? 0) > 0 && (
+                  <span className="absolute bottom-0.5 inset-x-0.5 text-center rounded bg-black/80 px-1 py-px text-[9px] font-mono font-bold tabular-nums text-[#10F5A0] truncate">
+                    W{stage.wave}
+                    {stage.isLastWave ? '!' : ''}
+                  </span>
+                )}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      !stage.inLobby && online
+                        ? 'bg-[#10F5A0] shadow-[0_0_6px_#10F5A0]'
+                        : 'bg-zinc-500'
+                    }`}
+                  />
+                  <span className="text-[10px] font-semibold tracking-wide text-zinc-400">
+                    {stage.inLobby ? 'อยู่ในล็อบบี้' : 'ด่านที่กำลังเล่น'}
+                  </span>
+                </div>
+                <p
+                  className="mt-0.5 text-sm font-bold text-white truncate"
+                  title={stage.name}
+                >
+                  {stage.name}
+                </p>
+                {stage.inLobby ? (
+                  <p className="text-[11px] text-zinc-500 truncate">
+                    รอเข้าด่าน — อัปเดตชื่อด่านและรูปอัตโนมัติ
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-zinc-400 truncate">
+                    {[
+                      stage.world,
+                      stage.difficulty || stage.gamemode,
+                      stage.boss ? `Boss: ${stage.boss}` : null,
+                      stage.enemiesLeft ? `เหลือ ${stage.enemiesLeft}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Segmented Progress Bar Block (Team Slots & Vault Overview) */}
@@ -492,6 +639,26 @@ export function AccountDashboard({
           </div>
         </div>
 
+        {/* Compact Extra Stats Strip (Trait/Curse/Rebirth Tokens, Trophies, XP, Resource) */}
+        {extraStatPills.length > 0 && (
+          <div className="border-t border-white/[0.08] px-4 py-2.5 grid grid-cols-3 gap-x-2 gap-y-2 bg-white/[0.015]">
+            {extraStatPills.slice(0, 6).map((stat) => (
+              <div key={stat.label} className="min-w-0">
+                <span className="block text-[10px] text-zinc-500 truncate">
+                  {stat.label}
+                </span>
+                <span
+                  className="block text-xs font-bold font-mono tabular-nums truncate"
+                  style={{ color: stat.accent }}
+                  title={`${stat.label}: ${formatNumber(stat.value)}`}
+                >
+                  {formatCompact(stat.value)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Script Update Notice when account synced from an older Lua script */}
         {!isReadOnly && scriptOutdated && onOpenSync && (
           <div className="border-t border-amber-400/20 bg-amber-400/[0.06] px-4 py-2.5 flex items-center justify-between gap-2.5">
@@ -525,9 +692,14 @@ export function AccountDashboard({
               {account.syncIntervalSec ? ` · ${account.syncIntervalSec}s` : ` · ${syncKey}`}
             </span>
           </span>
-          <span className="inline-flex items-center gap-1.5 shrink-0 tabular-nums">
+          <span
+            className="inline-flex items-center gap-1.5 shrink-0 tabular-nums font-mono text-[11px]"
+            title={`ซิงค์ล่าสุด (เวลาไทย): ${formatThaiDateTime(account.lastSyncedAt)}`}
+          >
             <Clock size={13} className="shrink-0 text-zinc-500" />
-            <span>{formatRelativeTime(account.lastSyncedAt, nowTs)}</span>
+            <span>
+              {formatClock(account.lastSyncedAt)} น. · {formatRelativeTime(account.lastSyncedAt, nowTs)}
+            </span>
           </span>
         </div>
       </aside>
@@ -642,14 +814,24 @@ export function AccountDashboard({
               </div>
             </div>
 
-            {/* Right Highlight Counter Box (matching RollinShop's Wave Box) */}
+            {/* Right Highlight Counter Box (Wave Box when in-stage + Stage Clears counter) */}
             <div className="flex shrink-0 gap-2">
+              {stage && !stage.inLobby && (stage.wave ?? 0) > 0 && (
+                <div className="flex h-14 min-w-[4.5rem] flex-col justify-center rounded-2xl bg-[#10151A] border border-[#10F5A0]/30 px-3 text-center">
+                  <span className="text-[11px] font-medium text-zinc-400 whitespace-nowrap">
+                    {stage.isLastWave ? 'Last Wave' : 'Wave'}
+                  </span>
+                  <span className="mt-0.5 block text-2xl font-display font-extrabold leading-none tabular-nums text-[#10F5A0]">
+                    {stage.wave}
+                  </span>
+                </div>
+              )}
               <div className="flex h-14 min-w-[4.75rem] flex-col justify-center rounded-2xl bg-[#10151A] border border-white/[0.09] px-3.5 text-center">
                 <span className="text-[11px] font-medium text-zinc-400 whitespace-nowrap">
-                  ของดรอป
+                  รอบจบด่าน
                 </span>
-                <span className="mt-0.5 block text-2xl font-display font-extrabold leading-none tabular-nums text-[#10F5A0]">
-                  {account.rewards.length}
+                <span className="mt-0.5 block text-2xl font-display font-extrabold leading-none tabular-nums text-white">
+                  {dropBatches.length}
                 </span>
               </div>
             </div>
@@ -943,7 +1125,13 @@ export function AccountDashboard({
                     {dropBatches.length}
                   </strong>{' '}
                   รอบดรอป ({account.rewards.length} รายการ)
-                  {account.rewards[0] ? ` · ล่าสุด ${account.rewards[0].t}` : ''}
+                  {account.rewards[0]
+                    ? ` · ล่าสุด ${
+                        account.rewards[0].ts > 0
+                          ? `${formatClock(account.rewards[0].ts)} น.`
+                          : account.rewards[0].t
+                      }`
+                    : ''}
                 </span>
 
                 {!isReadOnly && account.rewards.length > 0 && (
@@ -1032,40 +1220,65 @@ export function AccountDashboard({
                   {dropBatches.map((batch) => {
                     const topMeta = RARITY_META[batch.topRarity];
                     const headlineItem = batch.entries[0];
+                    const isStageRun = Boolean(batch.stageName);
+                    const metaParts = [
+                      batch.stageWorld,
+                      batch.stageDifficulty || batch.stageGamemode,
+                      batch.stageWaves,
+                      batch.stageTimer,
+                    ].filter(Boolean);
+
                     return (
                       <li
                         key={batch.id}
-                        className="grid grid-cols-[5.25rem_minmax(0,1fr)] items-start gap-x-3 py-3.5 sm:grid-cols-[6.75rem_minmax(0,1fr)]"
+                        className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3 py-3.5 sm:grid-cols-[7.25rem_minmax(0,1fr)]"
                       >
-                        {/* Left Event Thumbnail Card (matching RollinShop left stage card) */}
+                        {/* Left Stage Thumbnail Card with Real Roblox MapIcons Artwork */}
                         <div
-                          className="relative row-span-1 flex flex-col justify-between aspect-video w-full self-start overflow-hidden rounded-xl p-2 sm:row-span-2 sm:aspect-auto sm:min-h-[4.25rem] sm:self-stretch"
+                          className="relative row-span-1 flex flex-col justify-between aspect-video w-full self-start overflow-hidden rounded-xl p-2 sm:row-span-2 sm:aspect-auto sm:min-h-[4.5rem] sm:self-stretch"
                           style={{
                             background: `linear-gradient(145deg, ${topMeta.hex}24, rgba(16, 20, 24, 0.96) 75%)`,
                             boxShadow: `inset 0 0 0 1px ${topMeta.border}`,
                           }}
                         >
+                          {batch.stageImageId && (
+                            <>
+                              <RobloxAssetThumb
+                                assetId={batch.stageImageId}
+                                alt={batch.stageName || batch.srcShort}
+                                className="absolute inset-0 w-full h-full object-cover"
+                              />
+                              <div
+                                aria-hidden="true"
+                                className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/35 to-black/30"
+                              />
+                            </>
+                          )}
                           <span
-                            className="text-[10px] font-mono font-bold tabular-nums"
-                            style={{ color: topMeta.text }}
+                            className="relative z-10 text-[10px] font-mono font-bold tabular-nums drop-shadow"
+                            style={{ color: batch.stageImageId ? '#10F5A0' : topMeta.text }}
                           >
-                            +{formatNumber(batch.totalQty)} ชิ้น
+                            {batch.entries.length > 1
+                              ? `${batch.entries.length} รายการ`
+                              : `+${formatNumber(batch.totalQty)}`}
                           </span>
-                          <span className="truncate text-[11px] font-bold leading-none text-white">
-                            {batch.srcShort}
+                          <span className="relative z-10 truncate text-[10px] font-bold leading-tight text-white drop-shadow">
+                            {batch.stageTimer || batch.stageWaves || batch.srcShort}
                           </span>
                         </div>
 
-                        {/* Top Row: Event Title + Right-Aligned Clock */}
+                        {/* Top Row: Stage Name + Right-Aligned Clock */}
                         <div className="min-w-0">
                           <div className="flex items-baseline gap-x-2">
                             <span className="shrink-0 text-sm font-extrabold text-[#10F5A0]">
-                              ได้รับ
+                              {isStageRun ? 'จบด่าน' : 'ได้รับ'}
                             </span>
                             <span className="min-w-0 truncate text-sm font-semibold text-zinc-100">
-                              {batch.entries.length === 1
-                                ? headlineItem.name
-                                : `${batch.srcLabel} (${batch.entries.length} รายการ)`}
+                              {isStageRun
+                                ? batch.stageName
+                                : batch.entries.length === 1
+                                  ? headlineItem.name
+                                  : `${batch.srcLabel} (${batch.entries.length} รายการ)`}
                             </span>
                             <span className="ml-auto hidden shrink-0 pl-2 text-xs font-mono tabular-nums text-zinc-500 sm:inline">
                               {batch.timeLabel}
@@ -1075,7 +1288,9 @@ export function AccountDashboard({
                             <span className="font-mono tabular-nums text-zinc-500 sm:hidden">
                               {batch.timeLabel} ·{' '}
                             </span>
-                            <span>{batch.srcLabel}</span>
+                            <span>
+                              {metaParts.length > 0 ? metaParts.join(' · ') : batch.srcLabel}
+                            </span>
                             <span className="mx-1.5 text-zinc-600">·</span>
                             <span style={{ color: topMeta.text }}>
                               สูงสุด {batch.topRarity}
@@ -1083,7 +1298,7 @@ export function AccountDashboard({
                           </p>
                         </div>
 
-                        {/* Wrapped Inline Reward Chips (exact RollinShop chip list style!) */}
+                        {/* Wrapped Inline Bundled Reward Chips (All drops from this stage clear together) */}
                         <div className="col-span-2 mt-2 flex flex-wrap gap-1.5 sm:col-span-1 sm:col-start-2">
                           {batch.entries.map((entry, idx) => {
                             const meta = RARITY_META[entry.rarity];
@@ -1095,9 +1310,16 @@ export function AccountDashboard({
                                   boxShadow: `inset 0 0 0 1px ${meta.border}`,
                                 }}
                               >
-                                <span
-                                  className="size-2 rounded-full shrink-0"
-                                  style={{ backgroundColor: meta.hex }}
+                                <RobloxAssetThumb
+                                  assetId={entry.iconId}
+                                  alt={entry.name}
+                                  className="w-4 h-4 rounded object-contain shrink-0"
+                                  fallback={
+                                    <span
+                                      className="size-2 rounded-full shrink-0"
+                                      style={{ backgroundColor: meta.hex }}
+                                    />
+                                  }
                                 />
                                 <span
                                   className="max-w-[160px] truncate font-medium"
@@ -1106,7 +1328,8 @@ export function AccountDashboard({
                                   {entry.name}
                                 </span>
                                 <span className="font-mono font-semibold tabular-nums text-white">
-                                  ×{formatNumber(entry.qty)}
+                                  {entry.kind === 'currency' || isStageRun ? '+' : '×'}
+                                  {formatNumber(entry.qty)}
                                 </span>
                               </span>
                             );
@@ -1173,12 +1396,36 @@ export function AccountDashboard({
                         }}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <ItemEmblem
-                            kind={t.kind}
-                            rarity={t.rarity}
-                            name={t.name}
-                            size="sm"
-                          />
+                          {t.iconId ? (
+                            <div
+                              className="w-8 h-8 rounded-md shrink-0 overflow-hidden flex items-center justify-center"
+                              style={{
+                                backgroundColor: meta.softBg,
+                                border: `1px solid ${meta.border}`,
+                              }}
+                            >
+                              <RobloxAssetThumb
+                                assetId={t.iconId}
+                                alt={t.name}
+                                className="w-full h-full object-contain p-0.5"
+                                fallback={
+                                  <ItemEmblem
+                                    kind={t.kind}
+                                    rarity={t.rarity}
+                                    name={t.name}
+                                    size="sm"
+                                  />
+                                }
+                              />
+                            </div>
+                          ) : (
+                            <ItemEmblem
+                              kind={t.kind}
+                              rarity={t.rarity}
+                              name={t.name}
+                              size="sm"
+                            />
+                          )}
                           <div className="min-w-0">
                             <p
                               className="text-sm font-semibold truncate"
@@ -1187,12 +1434,18 @@ export function AccountDashboard({
                               {t.name}
                             </p>
                             <p className="text-[11px] text-zinc-500">
-                              {t.rarity} · {t.kind === 'unit' ? 'Unit' : 'Item'}
+                              {t.rarity} ·{' '}
+                              {t.kind === 'unit'
+                                ? 'Unit'
+                                : t.kind === 'currency'
+                                  ? 'Currency'
+                                  : 'Item'}
                             </p>
                           </div>
                         </div>
                         <span className="font-mono tabular-nums text-sm font-bold text-[#10F5A0] shrink-0">
-                          ×{formatNumber(t.qty)}
+                          {t.kind === 'currency' ? '+' : '×'}
+                          {formatNumber(t.qty)}
                         </span>
                       </div>
                     );
@@ -1405,13 +1658,38 @@ export function AccountDashboard({
                         }}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <ItemEmblem
-                            kind="item"
-                            group={it.group}
-                            rarity={it.rarity}
-                            name={it.name}
-                            size="sm"
-                          />
+                          {it.iconId ? (
+                            <div
+                              className="w-8 h-8 rounded-md shrink-0 overflow-hidden flex items-center justify-center"
+                              style={{
+                                backgroundColor: meta.softBg,
+                                border: `1px solid ${meta.border}`,
+                              }}
+                            >
+                              <RobloxAssetThumb
+                                assetId={it.iconId}
+                                alt={it.name}
+                                className="w-full h-full object-contain p-0.5"
+                                fallback={
+                                  <ItemEmblem
+                                    kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                    group={it.group}
+                                    rarity={it.rarity}
+                                    name={it.name}
+                                    size="sm"
+                                  />
+                                }
+                              />
+                            </div>
+                          ) : (
+                            <ItemEmblem
+                              kind={it.kind === 'unit' ? 'unit' : 'item'}
+                              group={it.group}
+                              rarity={it.rarity}
+                              name={it.name}
+                              size="sm"
+                            />
+                          )}
                           <span className="rounded-lg bg-black/55 px-2 py-0.5 font-mono text-xs font-bold tabular-nums text-[#10F5A0]">
                             ×{formatNumber(it.qty)}
                           </span>
@@ -1454,13 +1732,38 @@ export function AccountDashboard({
                           >
                             <td className="py-2.5 pl-5 pr-3">
                               <div className="flex items-center gap-2.5 min-w-[170px]">
-                                <ItemEmblem
-                                  kind="item"
-                                  group={it.group}
-                                  rarity={it.rarity}
-                                  name={it.name}
-                                  size="sm"
-                                />
+                                {it.iconId ? (
+                                  <div
+                                    className="w-8 h-8 rounded-md shrink-0 overflow-hidden flex items-center justify-center"
+                                    style={{
+                                      backgroundColor: meta.softBg,
+                                      border: `1px solid ${meta.border}`,
+                                    }}
+                                  >
+                                    <RobloxAssetThumb
+                                      assetId={it.iconId}
+                                      alt={it.name}
+                                      className="w-full h-full object-contain p-0.5"
+                                      fallback={
+                                        <ItemEmblem
+                                          kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                          group={it.group}
+                                          rarity={it.rarity}
+                                          name={it.name}
+                                          size="sm"
+                                        />
+                                      }
+                                    />
+                                  </div>
+                                ) : (
+                                  <ItemEmblem
+                                    kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                    group={it.group}
+                                    rarity={it.rarity}
+                                    name={it.name}
+                                    size="sm"
+                                  />
+                                )}
                                 <div className="min-w-0">
                                   <p
                                     className="font-semibold truncate"

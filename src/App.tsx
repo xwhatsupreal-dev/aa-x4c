@@ -10,6 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import {
+  formatClock,
   formatCompact,
   formatRelativeTime,
   isAccountOnline,
@@ -125,13 +126,14 @@ export default function App() {
   const pushToast = useCallback((reward: RewardEntry) => {
     const meta = RARITY_META[reward.rarity];
     const uid = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const prefix = reward.kind === 'unit' ? '+ UNIT' : '+ ITEM';
+    const prefix =
+      reward.kind === 'unit' ? '+ UNIT' : reward.kind === 'currency' ? '+' : '+ ITEM';
     const qtySuffix = reward.qty > 1 ? ` x${reward.qty}` : '';
     setToasts((prev) => [
       {
         uid,
         title: `${prefix}  ${reward.name}${qtySuffix}`,
-        subtitle: `${reward.rarity} · ${reward.t}`,
+        subtitle: `${reward.rarity} · ${reward.ts > 0 ? `${formatClock(reward.ts)} น.` : reward.t}`,
         color: meta.text,
         border: meta.border,
       },
@@ -142,6 +144,42 @@ export default function App() {
     }, 4000);
     toastTimeouts.current.push(tid);
   }, []);
+
+  const pushBundledToasts = useCallback(
+    (rewards: RewardEntry[]) => {
+      if (rewards.length === 0) return;
+      const runGroups = new Map<string, RewardEntry[]>();
+      const standalone: RewardEntry[] = [];
+      for (const r of rewards) {
+        if (r.runId) {
+          const list = runGroups.get(r.runId) ?? [];
+          list.push(r);
+          runGroups.set(r.runId, list);
+        } else {
+          standalone.push(r);
+        }
+      }
+
+      for (const [, list] of Array.from(runGroups.entries()).slice(0, 2)) {
+        const first = list[0];
+        const summary = list
+          .slice(0, 3)
+          .map((item) => `${item.name} +${item.qty}`)
+          .join(' · ');
+        const extra = list.length > 3 ? ` (+${list.length - 3})` : '';
+        pushSystemToast(
+          `จบด่าน: ${first.stageName || 'Stage Clear'}`,
+          `${summary}${extra}`,
+          true
+        );
+      }
+
+      if (runGroups.size === 0) {
+        standalone.slice(0, 3).forEach((r) => pushToast(r));
+      }
+    },
+    [pushSystemToast, pushToast]
+  );
 
   useEffect(() => {
     return () => {
@@ -154,7 +192,7 @@ export default function App() {
       const freshRewards: RewardEntry[] = [];
       for (const acc of list) {
         for (const r of acc.rewards) {
-          const sig = `${acc.accountId}|${r.t}|${r.kind}|${r.id}|${r.qty}|${r.src}`;
+          const sig = `${acc.accountId}|${r.runId || r.t}|${r.kind}|${r.id}|${r.qty}|${r.src}`;
           if (!seenRewardsRef.current.has(sig)) {
             seenRewardsRef.current.add(sig);
             if (triggerToasts) freshRewards.push(r);
@@ -162,10 +200,10 @@ export default function App() {
         }
       }
       if (triggerToasts && freshRewards.length > 0) {
-        freshRewards.slice(0, 3).forEach((r) => pushToast(r));
+        pushBundledToasts(freshRewards);
       }
     },
-    [pushToast]
+    [pushBundledToasts]
   );
 
   const fetchAccounts = useCallback(
@@ -265,7 +303,7 @@ export default function App() {
   }, [shareId, cloudflareUrl]);
 
   // Automatic real-time updates:
-  // - On Vercel / Cloudflare: poll every 2.5 seconds automatically when tab is visible
+  // - On Vercel / Cloudflare: poll every 10 seconds when tab is visible (saves 4x Redis/KV reads)
   // - On Express server: subscribe via SSE
   useEffect(() => {
     if (shareId) {
@@ -278,7 +316,7 @@ export default function App() {
         if (document.visibilityState === 'visible') {
           fetchAccounts(true);
         }
-      }, 2500);
+      }, 10000);
       return () => window.clearInterval(timer);
     }
 
@@ -305,8 +343,8 @@ export default function App() {
         if (wasEmpty) {
           setActiveTab('drops');
         }
-        if (Array.isArray(payload.newRewards)) {
-          payload.newRewards.slice(0, 3).forEach((r) => pushToast(r));
+        if (Array.isArray(payload.newRewards) && payload.newRewards.length > 0) {
+          pushBundledToasts(payload.newRewards);
         }
       } catch {
         // ignore malformed event
@@ -336,7 +374,7 @@ export default function App() {
       es.close();
       setLiveConnected(false);
     };
-  }, [shareId, syncKey, cloudflareUrl, isServerlessBackend, fetchAccounts, pushToast]);
+  }, [shareId, syncKey, cloudflareUrl, isServerlessBackend, fetchAccounts, pushBundledToasts]);
 
   const handleConnectCloudflare = useCallback(
     async (
@@ -483,20 +521,62 @@ export default function App() {
 
   const handleClearDrops = async () => {
     if (!activeAccount || shareId) return;
-    await fetch(
-      `${activeApiBase}/api/accounts/${encodeURIComponent(activeAccount.accountId)}/clear-drops?key=${encodeURIComponent(syncKey)}`,
-      { method: 'POST' }
-    );
-    await fetchAccounts(true);
+    try {
+      const res = await fetch(
+        `${activeApiBase}/api/accounts/${encodeURIComponent(activeAccount.accountId)}/clear-drops?key=${encodeURIComponent(syncKey)}`,
+        { method: 'POST' }
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        pushSystemToast(
+          'ล้างรายการของดรอปไม่สำเร็จ',
+          data?.error || `เซิร์ฟเวอร์ตอบกลับ HTTP ${res.status}`,
+          false
+        );
+        return;
+      }
+      setAccounts((prev) =>
+        prev.map((a) =>
+          a.accountId === activeAccount.accountId ? { ...a, rewards: [], totals: {} } : a
+        )
+      );
+      pushSystemToast('ล้างประวัติของดรอปแล้ว', `@${activeAccount.username}`, true);
+      await fetchAccounts(true);
+    } catch {
+      pushSystemToast(
+        'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อล้างของดรอปได้',
+        'ตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือสถานะฐานข้อมูล (เช่น โควต้า KV เต็ม)',
+        false
+      );
+    }
   };
 
   const handleDeleteAccount = async (accountId: string) => {
     if (shareId) return;
-    await fetch(
-      `${activeApiBase}/api/accounts/${encodeURIComponent(accountId)}?key=${encodeURIComponent(syncKey)}`,
-      { method: 'DELETE' }
-    );
-    await fetchAccounts(true);
+    try {
+      const res = await fetch(
+        `${activeApiBase}/api/accounts/${encodeURIComponent(accountId)}?key=${encodeURIComponent(syncKey)}`,
+        { method: 'DELETE' }
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        pushSystemToast(
+          'ลบบัญชีไม่สำเร็จ',
+          data?.error || `เซิร์ฟเวอร์ตอบกลับ HTTP ${res.status}`,
+          false
+        );
+        return;
+      }
+      setAccounts((prev) => prev.filter((a) => a.accountId !== accountId));
+      pushSystemToast('ลบบัญชีออกจากห้องแล้ว', accountId, true);
+      await fetchAccounts(true);
+    } catch {
+      pushSystemToast(
+        'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อลบบัญชีได้',
+        'ตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือสถานะฐานข้อมูล (เช่น โควต้า KV เต็ม)',
+        false
+      );
+    }
   };
 
   const navItems: Array<{ id: NavTab; label: string; icon: typeof History; hideInShare?: boolean }> = [
@@ -741,7 +821,9 @@ export default function App() {
                           </p>
                         </div>
                         <p className="mt-0.5 text-[11px] font-mono tabular-nums text-zinc-400 truncate">
-                          {formatCompact(acc.gems)} Gems · {formatCompact(acc.gold)} Gold
+                          {acc.currentStage && !acc.currentStage.inLobby
+                            ? `${acc.currentStage.name}${acc.currentStage.wave ? ` · W${acc.currentStage.wave}` : ''}`
+                            : `${formatCompact(acc.gems)} Gems · ${formatCompact(acc.gold)} Gold`}
                         </p>
                         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] truncate">
                           <span className={online ? 'text-[#10F5A0]' : 'text-zinc-500'}>

@@ -294,3 +294,35 @@ export async function fetchRobloxAvatarInfo(
     assets,
   };
 }
+
+const assetThumbCache = new Map<string, { url: string | null; expiresAt: number }>();
+
+export function extractRobloxAssetId(raw: unknown): string | null {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  const match = String(raw).match(/(\d{4,15})/);
+  return match ? match[1] : null;
+}
+
+export async function resolveRobloxAssetImageUrl(rawId: string): Promise<string | null> {
+  const id = extractRobloxAssetId(rawId);
+  if (!id) return null;
+
+  const cached = assetThumbCache.get(id);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.url;
+  }
+
+  for (const size of ['420x420', '150x150']) {
+    const url = await fetchThumbnailWithRetry(
+      `https://thumbnails.roblox.com/v1/assets?assetIds=${id}&size=${size}&format=Png&isCircular=false`
+    );
+    if (url && isAllowedRobloxCdnUrl(url)) {
+      assetThumbCache.set(id, { url, expiresAt: Date.now() + 3600_000 });
+      return url;
+    }
+  }
+
+  assetThumbCache.set(id, { url: null, expiresAt: Date.now() + 300_000 });
+  return null;
+}
+

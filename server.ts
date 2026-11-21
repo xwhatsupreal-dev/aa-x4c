@@ -10,13 +10,19 @@ import {
   SCRIPT_VERSION,
 } from './src/data/aaCatalog.ts';
 import { generateWebSyncLuaScript } from './src/utils/luaGenerator.ts';
-import { fetchRobloxAvatarInfo, isAllowedRobloxCdnUrl } from './src/utils/robloxAvatar.ts';
+import {
+  fetchRobloxAvatarInfo,
+  isAllowedRobloxCdnUrl,
+  resolveRobloxAssetImageUrl,
+} from './src/utils/robloxAvatar.ts';
 import type {
   AccountSnapshot,
+  ExtraStats,
   InventoryItem,
   RewardEntry,
   RewardTotal,
   ShareRecord,
+  StageInfo,
   SyncPayload,
   TeamUnit,
 } from './src/types.ts';
@@ -105,6 +111,58 @@ function normalizeTraits(traits: unknown): string[] {
   return [];
 }
 
+function cleanAssetId(raw: unknown): string | undefined {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return undefined;
+  return String(raw).match(/\d{4,15}/)?.[0];
+}
+
+function optStr(raw: unknown, maxLen = 80): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const s = raw.trim();
+  return s ? s.slice(0, maxLen) : undefined;
+}
+
+function optNum(raw: unknown): number | undefined {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
+}
+
+function sanitizeStage(raw: unknown, fallback?: StageInfo): StageInfo | undefined {
+  if (!raw || typeof raw !== 'object') return fallback;
+  const s = raw as Record<string, unknown>;
+  const inLobby = Boolean(s.inLobby);
+  return {
+    inLobby,
+    name: optStr(s.name, 80) || (inLobby ? 'ล็อบบี้' : 'Unknown Stage'),
+    id: optStr(s.id, 64),
+    world: optStr(s.world, 64),
+    map: optStr(s.map, 64),
+    gamemode: optStr(s.gamemode, 48),
+    difficulty: optStr(s.difficulty, 48),
+    locationName: optStr(s.locationName, 64),
+    boss: optStr(s.boss, 64),
+    wave: optNum(s.wave),
+    isLastWave: Boolean(s.isLastWave),
+    enemiesLeft: optStr(s.enemiesLeft, 24),
+    bossLeft: optStr(s.bossLeft, 24),
+    mapImageId: cleanAssetId(s.mapImageId),
+  };
+}
+
+function sanitizeExtraStats(raw: unknown, fallback?: ExtraStats): ExtraStats | undefined {
+  if (!raw || typeof raw !== 'object') return fallback;
+  const s = raw as Record<string, unknown>;
+  return {
+    playerXp: optNum(s.playerXp),
+    resource: optNum(s.resource),
+    trophies: optNum(s.trophies),
+    rebirthTokens: optNum(s.rebirthTokens),
+    behelitXp: optNum(s.behelitXp),
+    curseTokens: optNum(s.curseTokens),
+    traitTokens: optNum(s.traitTokens),
+  };
+}
+
 function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapshot): AccountSnapshot {
   const username = String(payload.username || 'UnknownPlayer').trim().slice(0, 64);
   const accountId = username.toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'player';
@@ -132,7 +190,8 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
           rarity: normalizeRarity(it.rarity),
           group: String(it.group || 'Other'),
           qty: Math.max(0, Number(it.qty) || 0),
-          kind: it.kind === 'unique' ? 'unique' : 'normal',
+          kind: it.kind === 'unique' ? 'unique' : it.kind === 'unit' ? 'unit' : 'normal',
+          iconId: cleanAssetId(it.iconId),
         }))
         .filter((it) => it.qty > 0)
     : existing?.inventory ?? [];
@@ -141,26 +200,38 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     ? payload.rewards
         .filter((r) => r && r.id)
         .map((r): RewardEntry => {
-          const ts = typeof r.ts === 'number' && r.ts > 0 ? r.ts : now;
+          const hasTs = typeof r.ts === 'number' && r.ts > 0;
+          const ts = hasTs ? r.ts! : now;
           return {
-            t: r.t || formatClock(ts),
+            t: hasTs ? formatClock(ts) : r.t || formatClock(ts),
             ts,
-            kind: r.kind === 'unit' ? 'unit' : 'item',
+            kind: r.kind === 'unit' ? 'unit' : r.kind === 'currency' ? 'currency' : 'item',
             id: String(r.id),
             name: String(r.name || r.id),
             rarity: normalizeRarity(r.rarity),
             qty: Math.max(1, Number(r.qty) || 1),
             src: String(r.src || 'sync'),
+            iconId: cleanAssetId(r.iconId),
+            runId: optStr(r.runId, 48),
+            stageName: optStr(r.stageName, 80),
+            stageWorld: optStr(r.stageWorld, 64),
+            stageMap: optStr(r.stageMap, 64),
+            stageDifficulty: optStr(r.stageDifficulty, 48),
+            stageGamemode: optStr(r.stageGamemode, 48),
+            stageWaves: optStr(r.stageWaves, 32),
+            stageTimer: optStr(r.stageTimer, 32),
+            stageImageId: cleanAssetId(r.stageImageId),
           };
         })
     : [];
 
   const mergedRewards: RewardEntry[] = existing ? [...existing.rewards] : [];
-  const seenSig = new Set(mergedRewards.map((r) => `${r.t}|${r.kind}|${r.id}|${r.qty}|${r.src}`));
+  const rewardSig = (r: RewardEntry) => `${r.runId || r.t}|${r.kind}|${r.id}|${r.qty}|${r.src}`;
+  const seenSig = new Set(mergedRewards.map(rewardSig));
   const newlyAdded: RewardEntry[] = [];
 
   for (const r of incomingRewards) {
-    const sig = `${r.t}|${r.kind}|${r.id}|${r.qty}|${r.src}`;
+    const sig = rewardSig(r);
     if (!seenSig.has(sig)) {
       seenSig.add(sig);
       newlyAdded.push(r);
@@ -181,7 +252,10 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
         name: r.name,
         rarity: r.rarity,
         qty: 0,
+        iconId: r.iconId,
       };
+    } else if (!totals[key].iconId && r.iconId) {
+      totals[key].iconId = r.iconId;
     }
     totals[key].qty += r.qty;
   }
@@ -196,6 +270,12 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
       ? payload.normalKindCount
       : inventory.filter((i) => i.kind === 'normal').length;
 
+  const ownedUnitsCount =
+    typeof payload.ownedUnitsCount === 'number'
+      ? Math.max(0, Math.floor(payload.ownedUnitsCount))
+      : inventory.filter((i) => i.kind === 'unit').reduce((sum, i) => sum + i.qty, 0) ||
+        existing?.ownedUnitsCount;
+
   return {
     accountId,
     username,
@@ -205,12 +285,15 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     gold: typeof payload.gold === 'number' ? payload.gold : existing?.gold ?? 0,
     gems: typeof payload.gems === 'number' ? payload.gems : existing?.gems ?? 0,
     level: typeof payload.level === 'number' ? payload.level : existing?.level,
+    extraStats: sanitizeExtraStats(payload.extraStats, existing?.extraStats),
+    currentStage: sanitizeStage(payload.currentStage, existing?.currentStage),
     equipped,
     inventory,
     rewards: finalRewards,
     totals,
     uniqueCount,
     normalKindCount,
+    ownedUnitsCount,
     lastSyncedAt: now,
     scriptVersion:
       typeof payload.scriptVersion === 'string' && payload.scriptVersion.trim()
@@ -218,7 +301,7 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
         : existing?.scriptVersion,
     syncIntervalSec:
       typeof payload.syncIntervalSec === 'number' && Number.isFinite(payload.syncIntervalSec)
-        ? Math.min(120, Math.max(5, Math.round(payload.syncIntervalSec)))
+        ? Math.min(600, Math.max(5, Math.round(payload.syncIntervalSec)))
         : existing?.syncIntervalSec,
     source: 'lua',
   };
@@ -239,7 +322,7 @@ async function startServer() {
     next();
   });
 
-  app.options('/api/{*splat}', (_req, res) => {
+  app.options(/^\/api\/.*/, (_req, res) => {
     res.sendStatus(204);
   });
 
@@ -300,6 +383,33 @@ async function startServer() {
     }
   });
 
+  // Same-origin Roblox asset thumbnail proxy (stage MapIcons + item/resource icons)
+  app.get('/api/asset-image', async (req, res) => {
+    const rawId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+    if (!/^\d{4,15}$/.test(rawId)) {
+      res.status(400).end('Invalid Roblox asset ID');
+      return;
+    }
+    try {
+      const imageUrl = await resolveRobloxAssetImageUrl(rawId);
+      if (!imageUrl || !isAllowedRobloxCdnUrl(imageUrl)) {
+        res.status(404).end();
+        return;
+      }
+      const upstream = await fetch(imageUrl);
+      if (!upstream.ok) {
+        res.status(upstream.status).end();
+        return;
+      }
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(buf);
+    } catch {
+      res.status(502).end();
+    }
+  });
+
   // Raw Lua loader endpoint so Roblox executors can run a 1-line loadstring(game:HttpGet(...))()
   app.get(['/api/script', '/api/script.lua'], (req, res) => {
     const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
@@ -312,8 +422,8 @@ async function startServer() {
     const syncKey = sanitizeKey(req.query.key) || 'main';
     const rawInterval = Number(req.query.interval);
     const intervalSec = Number.isFinite(rawInterval)
-      ? Math.min(120, Math.max(5, Math.round(rawInterval)))
-      : 10;
+      ? Math.min(600, Math.max(5, Math.round(rawInterval)))
+      : 120;
     const showGui = req.query.gui !== '0' && req.query.gui !== 'false';
     const rawEndpoint = typeof req.query.endpoint === 'string' ? req.query.endpoint.trim() : '';
     const safeEndpoint =
@@ -505,23 +615,44 @@ async function startServer() {
     res.json(share);
   });
 
+  let viteServer: Awaited<ReturnType<typeof createViteServer>> | null = null;
+
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
+    viteServer = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+      },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
+    app.use(viteServer.middlewares);
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
-    app.get('/{*splat}', (_req, res) => {
+    app.use((_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`AA Vault server running on http://localhost:${PORT}`);
   });
+
+  const shutdown = async () => {
+    if (viteServer) {
+      await viteServer.close().catch(() => {});
+    }
+    httpServer.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 2000).unref();
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Failed to start AA Vault server:', err);
+  process.exit(1);
+});

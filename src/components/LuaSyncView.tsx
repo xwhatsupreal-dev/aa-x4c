@@ -16,6 +16,7 @@ import {
   Unplug,
 } from 'lucide-react';
 import {
+  formatClock,
   formatRelativeTime,
   getOnlineTimeoutMs,
   isAccountOnline,
@@ -70,7 +71,7 @@ export function LuaSyncView({
     hostname === '127.0.0.1';
 
   const [keyInput, setKeyInput] = useState(syncKey);
-  const [intervalSec, setIntervalSec] = useState(10);
+  const [intervalSec, setIntervalSec] = useState(120);
   const [showInGameGui, setShowInGameGui] = useState(true);
   const [copiedLoader, setCopiedLoader] = useState(false);
   const [copiedRawUrl, setCopiedRawUrl] = useState(false);
@@ -110,7 +111,7 @@ export function LuaSyncView({
   const rawScriptUrl = useMemo(() => {
     const params = new URLSearchParams();
     if (syncKey && syncKey !== 'main') params.set('key', syncKey);
-    if (intervalSec !== 10) params.set('interval', String(intervalSec));
+    if (intervalSec !== 120) params.set('interval', String(intervalSec));
     if (!showInGameGui) params.set('gui', '0');
     if (cloudflareUrl) params.set('endpoint', `${cloudflareUrl.replace(/\/$/, '')}/api/sync`);
     const qs = params.toString();
@@ -133,12 +134,14 @@ export function LuaSyncView({
   const providerLabel = cloudflareUrl
     ? 'Cloudflare Worker KV'
     : backendProvider === 'vercel-kv'
-      ? 'Vercel KV / Redis (ถาวร)'
-      : backendProvider === 'cloudflare-kv-vercel'
-        ? 'Vercel + Cloudflare KV (ถาวร)'
-        : backendProvider === 'vercel-builtin'
-          ? 'Vercel API อัตโนมัติ'
-          : 'เซิร์ฟเวอร์อัตโนมัติ';
+      ? 'Upstash Redis / Vercel KV (ถาวร)'
+      : backendProvider === 'cloudflare-worker'
+        ? 'Cloudflare Worker KV (ผ่าน Proxy)'
+        : backendProvider === 'cloudflare-kv-vercel'
+          ? 'Vercel + Cloudflare KV (ถาวร)'
+          : backendProvider === 'vercel-builtin'
+            ? 'Vercel API อัตโนมัติ'
+            : 'เซิร์ฟเวอร์อัตโนมัติ';
 
   const handleApplyKey = () => {
     const cleaned = keyInput.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
@@ -324,6 +327,11 @@ export function LuaSyncView({
           type: 'warn',
           text: 'API ทำงานแล้ว แต่ Vercel ยังไม่ได้เชื่อม Upstash Redis (ข้อมูลใน /tmp จะไม่แชร์ข้ามรอบ) — เข้า Vercel > Storage เชื่อม Upstash แล้วกด Redeploy 1 ครั้ง',
         });
+      } else if (hData.provider === 'cloudflare-worker') {
+        setDiagResult({
+          type: 'warn',
+          text: 'ตอนนี้เว็บกำลังส่งต่อข้อมูลไปที่ Cloudflare Worker (โควต้า KV ฟรีจำกัด 1,000 ครั้ง/วัน อาจขึ้น HTTP 500 / Error 1101) — หากเชื่อม Upstash Redis ใน Vercel แล้ว แนะนำให้ลบตัวแปร CLOUDFLARE_WORKER_URL แล้วกด Redeploy เพื่อให้สลับมาใช้ Upstash Redis',
+        });
       } else {
         setDiagResult({
           type: 'ok',
@@ -341,6 +349,13 @@ export function LuaSyncView({
   };
 
   const offlineTimeoutSec = Math.round(getOnlineTimeoutMs(intervalSec) / 1000);
+  const estimatedDailyWrites = Math.round(86400 / intervalSec);
+  const formatDurationLabel = (sec: number) =>
+    sec >= 60
+      ? sec % 60 === 0
+        ? `${sec / 60} นาที`
+        : `${Math.floor(sec / 60)} นาที ${sec % 60} วิ`
+      : `${sec} วินาที`;
   const outdatedAccountsCount = accounts.filter((a) => isScriptOutdated(a.scriptVersion)).length;
 
   return (
@@ -386,6 +401,21 @@ export function LuaSyncView({
             </p>
             <p className="text-amber-100/80">
               หากติดตั้ง <strong className="text-white">Upstash for Redis</strong> ใน Vercel แล้ว กรุณาตรวจสอบว่าเชื่อมต่อกับโปรเจกต์นี้ในเมนู <strong className="text-white">Storage</strong> และกด <strong className="text-white">Redeploy</strong> ใน Vercel 1 ครั้งเพื่อให้ระบบโหลดค่า Redis ใช้งานจริงครับ
+            </p>
+          </div>
+        </section>
+      )}
+
+      {/* Warning when Vercel is forwarding through legacy CLOUDFLARE_WORKER_URL (1,000 writes/day cap) */}
+      {!isPreviewHost && !cloudflareUrl && backendProvider === 'cloudflare-worker' && (
+        <section className="rounded-3xl bg-amber-500/[0.08] border border-amber-400/35 p-4 sm:p-5 flex items-start gap-3">
+          <AlertCircle size={18} className="text-amber-300 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs leading-relaxed">
+            <p className="font-bold text-amber-200">
+              เว็บกำลังส่งข้อมูลผ่าน Cloudflare Worker (โควต้า KV ฟรีจำกัดเขียน 1,000 ครั้ง/วัน — ถ้าเต็มจะขึ้น HTTP 500)
+            </p>
+            <p className="text-amber-100/80">
+              หากคุณเชื่อมต่อ <strong className="text-white">Upstash for Redis</strong> บน Vercel แล้ว ให้เข้าไปที่ <strong className="text-white">Vercel &gt; Settings &gt; Environment Variables</strong> แล้วลบตัวแปร <code className="font-mono text-amber-200">CLOUDFLARE_WORKER_URL</code> (หรือ Deploy โค้ดล่าสุดนี้) ระบบจะสลับไปใช้ Upstash Redis ที่รับซิงค์ได้วันละ 16,000+ ครั้งให้อัตโนมัติครับ
             </p>
           </div>
         </section>
@@ -521,7 +551,7 @@ export function LuaSyncView({
                       )}
                     </div>
                     <p className="mt-0.5 text-xs text-zinc-500">
-                      ซิงค์ล่าสุด {formatRelativeTime(acc.lastSyncedAt, nowTs)}
+                      ซิงค์ล่าสุด {formatClock(acc.lastSyncedAt)} น. ({formatRelativeTime(acc.lastSyncedAt, nowTs)})
                       {acc.syncIntervalSec ? ` · เช็คทุก ${acc.syncIntervalSec} วิ` : ''}
                       {' · '}ทีม {acc.equipped.length}/6 · ไอเทม {acc.inventory.length} ชนิด
                     </p>
@@ -569,11 +599,11 @@ export function LuaSyncView({
               aria-label="ความถี่ในการเช็คออนไลน์และซิงค์"
               className="px-3 py-1.5 text-xs rounded-xl bg-[#050709] border border-white/[0.10] text-zinc-200 focus:outline-none focus:border-[#10F5A0]/60 cursor-pointer"
             >
-              <option value={5}>เช็ค/ซิงค์ทุก 5 วินาที</option>
-              <option value={10}>เช็ค/ซิงค์ทุก 10 วินาที</option>
-              <option value={15}>เช็ค/ซิงค์ทุก 15 วินาที</option>
-              <option value={30}>เช็ค/ซิงค์ทุก 30 วินาที</option>
-              <option value={60}>เช็ค/ซิงค์ทุก 60 วินาที</option>
+              <option value={30}>เช็คทุก 30 วินาที (~2,880 ครั้ง/วัน)</option>
+              <option value={60}>เช็คทุก 1 นาที (~1,440 ครั้ง/วัน)</option>
+              <option value={120}>เช็คทุก 2 นาที — แนะนำ (~720 ครั้ง/วัน)</option>
+              <option value={300}>เช็คทุก 5 นาที — ประหยัดมาก (~288 ครั้ง/วัน)</option>
+              <option value={600}>เช็คทุก 10 นาที — ประหยัดสูงสุด (~144 ครั้ง/วัน)</option>
             </select>
           </div>
         </div>
@@ -588,10 +618,11 @@ export function LuaSyncView({
           <p className="flex items-start gap-2 text-xs text-zinc-400">
             <Activity size={14} className="text-[#10F5A0] shrink-0 mt-0.5" />
             <span>
-              ขณะรันสคริปต์ ระบบจะส่งสัญญาณ Heartbeat และอัปเดตของทุก ๆ{' '}
-              <strong className="text-zinc-200">{intervalSec} วินาที</strong> — หากปิดเกมหรือสคริปต์หยุดเกิน{' '}
-              <strong className="text-zinc-200">~{offlineTimeoutSec} วินาที</strong> เว็บจะสลับเป็น{' '}
-              <strong className="text-zinc-200">ออฟไลน์</strong> อัตโนมัติ (แต่ยังเก็บของค้างไว้ให้ดูต่อได้)
+              <strong className="text-[#10F5A0]">โหมดประหยัดการเขียน:</strong> ส่งเช็คออนไลน์ทุก{' '}
+              <strong className="text-zinc-200">{formatDurationLabel(intervalSec)}</strong>{' '}
+              (~<strong className="text-zinc-200">{estimatedDailyWrites.toLocaleString('th-TH')} ครั้ง/วัน</strong> ต่อ 1 ไอดี)
+              · หากมี<strong className="text-zinc-200">ของดรอปใหม่หลังจบด่านจะรวมส่งทันทีภายใน 3 วิ</strong>{' '}
+              (ไม่ต้องรอครบรอบ) และสลับเป็นออฟไลน์เมื่อเงียบเกิน ~{formatDurationLabel(offlineTimeoutSec)}
             </span>
           </p>
 

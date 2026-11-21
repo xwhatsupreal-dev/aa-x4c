@@ -8,6 +8,33 @@ export type Rarity =
   | 'Uncommon'
   | 'Common';
 
+export interface StageInfo {
+  inLobby: boolean;
+  name: string;
+  id?: string;
+  world?: string;
+  map?: string;
+  gamemode?: string;
+  difficulty?: string;
+  locationName?: string;
+  boss?: string;
+  wave?: number;
+  isLastWave?: boolean;
+  enemiesLeft?: string;
+  bossLeft?: string;
+  mapImageId?: string;
+}
+
+export interface ExtraStats {
+  playerXp?: number;
+  resource?: number;
+  trophies?: number;
+  rebirthTokens?: number;
+  behelitXp?: number;
+  curseTokens?: number;
+  traitTokens?: number;
+}
+
 export interface TeamUnit {
   slot: number;
   id: string;
@@ -29,26 +56,38 @@ export interface InventoryItem {
   rarity: Rarity;
   group: string;
   qty: number;
-  kind: 'normal' | 'unique';
+  kind: 'normal' | 'unique' | 'unit';
+  iconId?: string;
 }
 
 export interface RewardEntry {
   t: string;
   ts: number;
-  kind: 'item' | 'unit';
+  kind: 'item' | 'unit' | 'currency';
   id: string;
   name: string;
   rarity: Rarity;
   qty: number;
   src: string;
+  iconId?: string;
+  runId?: string;
+  stageName?: string;
+  stageWorld?: string;
+  stageMap?: string;
+  stageDifficulty?: string;
+  stageGamemode?: string;
+  stageWaves?: string;
+  stageTimer?: string;
+  stageImageId?: string;
 }
 
 export interface RewardTotal {
-  kind: 'item' | 'unit';
+  kind: 'item' | 'unit' | 'currency';
   id: string;
   name: string;
   rarity: Rarity;
   qty: number;
+  iconId?: string;
 }
 
 export interface RobloxAvatarAppearance {
@@ -78,12 +117,15 @@ export interface AccountSnapshot {
   gold: number;
   gems: number;
   level?: number;
+  extraStats?: ExtraStats;
+  currentStage?: StageInfo;
   equipped: TeamUnit[];
   inventory: InventoryItem[];
   rewards: RewardEntry[];
   totals: Record<string, RewardTotal>;
   uniqueCount: number;
   normalKindCount: number;
+  ownedUnitsCount?: number;
   lastSyncedAt: number;
   scriptVersion?: string;
   syncIntervalSec?: number;
@@ -105,6 +147,8 @@ export interface SyncPayload {
   gold?: number;
   gems?: number;
   level?: number;
+  extraStats?: ExtraStats;
+  currentStage?: StageInfo;
   equipped?: Array<{
     slot?: number;
     id: string;
@@ -121,20 +165,32 @@ export interface SyncPayload {
     rarity?: string;
     group?: string;
     qty?: number;
-    kind?: 'normal' | 'unique';
+    kind?: 'normal' | 'unique' | 'unit';
+    iconId?: string;
   }>;
   rewards?: Array<{
     t?: string;
     ts?: number;
-    kind?: 'item' | 'unit';
+    kind?: 'item' | 'unit' | 'currency';
     id: string;
     name?: string;
     rarity?: string;
     qty?: number;
     src?: string;
+    iconId?: string;
+    runId?: string;
+    stageName?: string;
+    stageWorld?: string;
+    stageMap?: string;
+    stageDifficulty?: string;
+    stageGamemode?: string;
+    stageWaves?: string;
+    stageTimer?: string;
+    stageImageId?: string;
   }>;
   uniqueCount?: number;
   normalKindCount?: number;
+  ownedUnitsCount?: number;
   scriptVersion?: string;
   syncIntervalSec?: number;
 }

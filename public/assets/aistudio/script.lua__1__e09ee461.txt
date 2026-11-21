@@ -1,0 +1,1297 @@
+-- ============================================================
+-- 2K | Anime Adventures — ทีม 6 (มีรูป) + ด่าน + รางวัลจบด่าน + กระเป๋า
+-- รูปทีม = ภาพนิ่ง (แคช) เรนเดอร์จากโมเดลจริง / สลับเป็นการ์ด 2D ได้
+-- ============================================================
+if getgenv().TwoK then pcall(function() getgenv().TwoK.Stop() end) end
+
+local H = { Running = true, Conns = {}, Rewards = {}, Tab = "team", Team = {}, Bag = {},
+	Flags = { Notify = true, Models = true, Pic = "photo" }, LastStats = {}, LastProf = nil,
+	LevelName = "?", MapImg = nil, ResultsSeen = false, Portraits = {}, PicMode = nil }
+getgenv().TwoK = H
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local LP = Players.LocalPlayer
+local PG = LP:WaitForChild("PlayerGui")
+
+local function idx(root, path)
+	if not root then return nil end
+	local cur = root
+	for part in string.gmatch(path, "[^%.]+") do
+		if not cur then return nil end
+		cur = cur:FindFirstChild(part)
+	end
+	return cur
+end
+local function txt(root, path)
+	local i = idx(root, path)
+	if i and (i:IsA("TextLabel") or i:IsA("TextButton")) then return i.Text end
+	return nil
+end
+local function imgOf(root, path)
+	local i = idx(root, path)
+	if i and (i:IsA("ImageLabel") or i:IsA("ImageButton")) and i.Image ~= "" then return i.Image end
+	return nil
+end
+local function stamp()
+	local ok, s = pcall(os.date, "%H:%M:%S")
+	if ok and s then return s end
+	return "--:--:--"
+end
+
+------------------------------------------------------------------
+-- DATA / ASSETS
+------------------------------------------------------------------
+local DataFolder = idx(RS, "src.Data")
+local function req(name)
+	local m = DataFolder and DataFolder:FindFirstChild(name)
+	if not m then return {} end
+	local ok, r = pcall(require, m)
+	if ok and type(r) == "table" then return r end
+	return {}
+end
+local Items, Units = req("Items"), req("Units")
+
+local Assets = idx(RS, "packages.assets")
+local ItemModels = Assets and Assets:FindFirstChild("ItemModels")
+local MapIcons = Assets and Assets:FindFirstChild("MapIcons")
+local GuiAs = Assets and Assets:FindFirstChild("gui")
+local OverrideIcons = GuiAs and GuiAs:FindFirstChild("_OverrideItemIcons")
+
+local RES_ICON = {}
+do
+	local res = GuiAs and GuiAs:FindFirstChild("_Resource")
+	if res then
+		for _, c in ipairs(res:GetChildren()) do
+			for _, d in ipairs(c:GetDescendants()) do
+				if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" then
+					RES_ICON[c.Name] = d.Image
+					break
+				end
+			end
+		end
+	end
+end
+
+local RCOL = {
+	Common = Color3.fromRGB(160, 160, 172), Uncommon = Color3.fromRGB(110, 200, 120),
+	Rare = Color3.fromRGB(90, 160, 255), Epic = Color3.fromRGB(180, 110, 255),
+	Legendary = Color3.fromRGB(255, 190, 80), Mythic = Color3.fromRGB(255, 120, 90),
+	Secret = Color3.fromRGB(255, 100, 165), Exclusive = Color3.fromRGB(130, 220, 235),
+}
+local function rcol(r) return RCOL[tostring(r)] or Color3.fromRGB(150, 150, 165) end
+
+local function itemImg(id)
+	if not id then return nil end
+	if OverrideIcons then
+		local l = OverrideIcons:FindFirstChild(tostring(id))
+		if l then
+			for _, x in ipairs(l:GetDescendants()) do
+				if (x:IsA("ImageLabel") or x:IsA("ImageButton")) and x.Image ~= "" then return x.Image end
+			end
+		end
+	end
+	local d = Items[id]
+	if type(d) == "table" then
+		for _, k in ipairs({ "icon", "image", "_icon", "_resource_icon" }) do
+			local v = d[k]
+			if type(v) == "string" and v ~= "" then return v end
+		end
+	end
+	return nil
+end
+
+local function itemModel(id)
+	if not (ItemModels and id) then return nil end
+	local d = Items[id]
+	local key = (type(d) == "table" and d._use_item_model) or id
+	local m = ItemModels:FindFirstChild(tostring(key))
+	if m and (m:IsA("Model") or m:IsA("BasePart")) then return m end
+	return nil
+end
+
+local function mapImage(mapId, world)
+	if not MapIcons then return nil end
+	for _, key in ipairs({ mapId, world, "lobby" }) do
+		if key then
+			local f = MapIcons:FindFirstChild(tostring(key))
+			if f then
+				for _, d in ipairs(f:GetDescendants()) do
+					if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" then return d.Image end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+------------------------------------------------------------------
+-- PROFILE (เลือก table คะแนนสูงสุด — กัน gc หลอก)
+------------------------------------------------------------------
+local function scoreProfile(o)
+	local s = 0
+	local col = rawget(o, "collection")
+	if type(col) == "table" then
+		s = s + 1
+		if type(rawget(col, "owned_units")) == "table" then s = s + 3 end
+		if type(rawget(col, "equipped_units")) == "table" then s = s + 2 end
+	end
+	local inv = rawget(o, "inventory")
+	if type(inv) == "table" then
+		s = s + 1
+		if type(rawget(inv, "normal_items")) == "table" then s = s + 2 end
+	end
+	if type(rawget(o, "loadouts_v2")) == "table" then s = s + 2 end
+	if type(rawget(o, "gold_amount")) == "number" then s = s + 1 end
+	return s
+end
+
+local function findProfile()
+	if H.Profile and scoreProfile(H.Profile) >= 9 then return H.Profile end
+	local best, bestScore = nil, 0
+	for _, o in ipairs(getgc(true)) do
+		if type(o) == "table" then
+			local ok, sc = pcall(scoreProfile, o)
+			if ok and sc > bestScore then best, bestScore = o, sc end
+		end
+	end
+	if best and bestScore >= 6 then
+		H.Profile = best
+		return best
+	end
+	return nil
+end
+
+local function snapStats()
+	local t = {}
+	local s = LP:FindFirstChild("_stats")
+	if s then
+		for _, c in ipairs(s:GetChildren()) do
+			if c:IsA("ValueBase") then
+				local ok, v = pcall(function() return c.Value end)
+				if ok and type(v) == "number" then t[c.Name] = v end
+			end
+		end
+	end
+	return t
+end
+
+local function snapProf()
+	local items, units, uniques = {}, {}, {}
+	local p = findProfile()
+	if p then
+		local inv = rawget(p, "inventory")
+		if type(inv) == "table" then
+			local ni = rawget(inv, "normal_items")
+			if type(ni) == "table" then
+				for id, amt in pairs(ni) do
+					if type(id) == "string" and type(amt) == "number" then items[id] = amt end
+				end
+			end
+			local ui = rawget(inv, "unique_items")
+			if type(ui) == "table" then
+				for uuid, u in pairs(ui) do
+					if type(u) == "table" and type(u.item_id) == "string" then uniques[uuid] = u.item_id end
+				end
+			end
+		end
+		local col = rawget(p, "collection")
+		if type(col) == "table" then
+			local ou = rawget(col, "owned_units")
+			if type(ou) == "table" then
+				for uuid, u in pairs(ou) do
+					if type(u) == "table" and type(u.unit_id) == "string" then units[uuid] = u.unit_id end
+				end
+			end
+		end
+	end
+	return { items = items, units = units, uniques = uniques }
+end
+
+------------------------------------------------------------------
+-- GUI
+------------------------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "2K_Scout"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 85
+gui.Parent = (gethui and gethui()) or PG
+
+local stash = Instance.new("Frame")
+stash.Size = UDim2.fromOffset(1, 1)
+stash.BackgroundTransparency = 1
+stash.Visible = false
+stash.Parent = gui
+
+local main = Instance.new("Frame")
+main.Size = UDim2.fromOffset(392, 574)
+main.Position = UDim2.new(0, 40, 0, 60)
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+main.BorderSizePixel = 0
+main.Active = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+local mst = Instance.new("UIStroke", main)
+mst.Color = Color3.fromRGB(58, 58, 78)
+mst.Thickness = 1
+
+local titleBar = Instance.new("TextButton")
+titleBar.Size = UDim2.new(1, 0, 0, 34)
+titleBar.BackgroundColor3 = Color3.fromRGB(31, 31, 42)
+titleBar.Text = "  2K | ด่าน • รางวัล • ทีม • กระเป๋า"
+titleBar.TextXAlignment = Enum.TextXAlignment.Left
+titleBar.TextColor3 = Color3.fromRGB(236, 236, 248)
+titleBar.Font = Enum.Font.GothamBold
+titleBar.TextSize = 13
+titleBar.AutoButtonColor = false
+titleBar.BorderSizePixel = 0
+titleBar.ZIndex = 3
+titleBar.Parent = main
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 12)
+
+local function topBtn(label, xo, col, cb)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(26, 26)
+	b.Position = UDim2.new(1, xo, 0, 4)
+	b.BackgroundColor3 = col
+	b.Text = label
+	b.TextSize = 13
+	b.Font = Enum.Font.GothamBold
+	b.TextColor3 = Color3.fromRGB(245, 245, 250)
+	b.BorderSizePixel = 0
+	b.ZIndex = 5
+	b.Parent = main
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+	b.MouseButton1Click:Connect(cb)
+	return b
+end
+topBtn("X", -32, Color3.fromRGB(168, 62, 62), function() H.Stop() end)
+topBtn("-", -62, Color3.fromRGB(58, 58, 82), function()
+	if main.Size.Y.Offset > 40 then main.Size = UDim2.fromOffset(392, 34) else main.Size = UDim2.fromOffset(392, 574) end
+end)
+
+do
+	local dragging, sp, si = false, nil, nil
+	titleBar.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			sp = i.Position
+			si = main.Position
+		end
+	end)
+	UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - sp
+			main.Position = UDim2.new(si.X.Scale, si.X.Offset + d.X, si.Y.Scale, si.Y.Offset + d.Y)
+		end
+	end)
+	UIS.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+	end)
+end
+
+local loc = Instance.new("Frame")
+loc.Size = UDim2.new(1, -12, 0, 74)
+loc.Position = UDim2.fromOffset(6, 40)
+loc.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+loc.BorderSizePixel = 0
+loc.Parent = main
+Instance.new("UICorner", loc).CornerRadius = UDim.new(0, 9)
+local locImg = Instance.new("ImageLabel")
+locImg.Size = UDim2.fromOffset(62, 62)
+locImg.Position = UDim2.fromOffset(6, 6)
+locImg.BackgroundColor3 = Color3.fromRGB(40, 40, 54)
+locImg.BorderSizePixel = 0
+locImg.ScaleType = Enum.ScaleType.Crop
+locImg.Image = ""
+locImg.Parent = loc
+Instance.new("UICorner", locImg).CornerRadius = UDim.new(0, 7)
+local locTitle = Instance.new("TextLabel")
+locTitle.Size = UDim2.new(1, -80, 0, 20)
+locTitle.Position = UDim2.fromOffset(74, 5)
+locTitle.BackgroundTransparency = 1
+locTitle.Font = Enum.Font.GothamBold
+locTitle.TextSize = 14
+locTitle.TextXAlignment = Enum.TextXAlignment.Left
+locTitle.TextColor3 = Color3.fromRGB(240, 240, 250)
+locTitle.Text = "กำลังตรวจ..."
+locTitle.TextTruncate = Enum.TextTruncate.AtEnd
+locTitle.Parent = loc
+local locSub = Instance.new("TextLabel")
+locSub.Size = UDim2.new(1, -80, 0, 46)
+locSub.Position = UDim2.fromOffset(74, 24)
+locSub.BackgroundTransparency = 1
+locSub.Font = Enum.Font.Gotham
+locSub.TextSize = 11
+locSub.TextWrapped = true
+locSub.TextXAlignment = Enum.TextXAlignment.Left
+locSub.TextColor3 = Color3.fromRGB(175, 175, 192)
+locSub.Text = ""
+locSub.Parent = loc
+
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -12, 0, 26)
+tabBar.Position = UDim2.fromOffset(6, 120)
+tabBar.BackgroundTransparency = 1
+tabBar.Parent = main
+local tbl = Instance.new("UIListLayout", tabBar)
+tbl.FillDirection = Enum.FillDirection.Horizontal
+tbl.Padding = UDim.new(0, 5)
+
+local tabBtns = {}
+for _, def in ipairs({ { "level", "ด่านนี้" }, { "reward", "รางวัล" }, { "team", "ทีม 6" }, { "bag", "กระเป๋า" } }) do
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(80, 24)
+	b.BackgroundColor3 = Color3.fromRGB(38, 38, 52)
+	b.Text = def[2]
+	b.TextColor3 = Color3.fromRGB(222, 222, 236)
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 11
+	b.BorderSizePixel = 0
+	b.Parent = tabBar
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 7)
+	b.MouseButton1Click:Connect(function() H.Tab = def[1]; pcall(H.Render) end)
+	tabBtns[def[1]] = b
+end
+
+local content = Instance.new("ScrollingFrame")
+content.Size = UDim2.new(1, -12, 1, -258)
+content.Position = UDim2.fromOffset(6, 150)
+content.BackgroundColor3 = Color3.fromRGB(26, 26, 34)
+content.BorderSizePixel = 0
+content.ScrollBarThickness = 5
+content.CanvasSize = UDim2.new()
+content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+content.Parent = main
+Instance.new("UICorner", content).CornerRadius = UDim.new(0, 8)
+local cl = Instance.new("UIListLayout", content)
+cl.Padding = UDim.new(0, 5)
+cl.SortOrder = Enum.SortOrder.LayoutOrder
+local cpad = Instance.new("UIPadding", content)
+cpad.PaddingTop = UDim.new(0, 6)
+cpad.PaddingLeft = UDim.new(0, 6)
+cpad.PaddingRight = UDim.new(0, 6)
+cpad.PaddingBottom = UDim.new(0, 6)
+
+local actRow = Instance.new("Frame")
+actRow.Size = UDim2.new(1, -12, 0, 56)
+actRow.Position = UDim2.new(0, 6, 1, -110)
+actRow.BackgroundTransparency = 1
+actRow.Parent = main
+local arl = Instance.new("UIListLayout", actRow)
+arl.FillDirection = Enum.FillDirection.Horizontal
+arl.Padding = UDim.new(0, 5)
+arl.Wraps = true
+local function act(label, cb)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(88, 24)
+	b.BackgroundColor3 = Color3.fromRGB(45, 45, 62)
+	b.Text = label
+	b.TextColor3 = Color3.fromRGB(225, 225, 240)
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 11
+	b.BorderSizePixel = 0
+	b.Parent = actRow
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+	b.MouseButton1Click:Connect(cb)
+	return b
+end
+
+local footer = Instance.new("TextLabel")
+footer.Size = UDim2.new(1, -12, 0, 48)
+footer.Position = UDim2.new(0, 6, 1, -50)
+footer.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+footer.BorderSizePixel = 0
+footer.Font = Enum.Font.Gotham
+footer.TextSize = 10
+footer.TextWrapped = true
+footer.TextColor3 = Color3.fromRGB(200, 200, 215)
+footer.Text = "..."
+footer.Parent = main
+Instance.new("UICorner", footer).CornerRadius = UDim.new(0, 8)
+
+------------------------------------------------------------------
+-- TOAST
+------------------------------------------------------------------
+local toastGui = Instance.new("ScreenGui")
+toastGui.Name = "2K_ScoutToasts"
+toastGui.ResetOnSpawn = false
+toastGui.DisplayOrder = 90
+toastGui.Parent = (gethui and gethui()) or PG
+local th = Instance.new("Frame")
+th.Size = UDim2.new(0, 306, 1, -40)
+th.Position = UDim2.new(1, -318, 0, 20)
+th.BackgroundTransparency = 1
+th.Parent = toastGui
+local thl = Instance.new("UIListLayout", th)
+thl.Padding = UDim.new(0, 6)
+thl.SortOrder = Enum.SortOrder.LayoutOrder
+
+local function toast(title, sub, col, img)
+	local f = Instance.new("Frame")
+	f.Size = UDim2.new(1, 0, 0, 46)
+	f.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+	f.BackgroundTransparency = 0.05
+	f.BorderSizePixel = 0
+	f.Parent = th
+	Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+	local st = Instance.new("UIStroke", f)
+	st.Color = col
+	st.Thickness = 1.5
+	local bar = Instance.new("Frame")
+	bar.Size = UDim2.new(0, 4, 1, -8)
+	bar.Position = UDim2.fromOffset(4, 4)
+	bar.BackgroundColor3 = col
+	bar.BorderSizePixel = 0
+	bar.Parent = f
+	Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 4)
+	local tx = 14
+	if img then
+		tx = 52
+		local ic = Instance.new("ImageLabel")
+		ic.Size = UDim2.fromOffset(34, 34)
+		ic.Position = UDim2.fromOffset(10, 6)
+		ic.BackgroundColor3 = Color3.fromRGB(40, 40, 52)
+		ic.Image = img
+		ic.ScaleType = Enum.ScaleType.Fit
+		ic.BorderSizePixel = 0
+		ic.Parent = f
+		Instance.new("UICorner", ic).CornerRadius = UDim.new(0, 6)
+	end
+	local t1 = Instance.new("TextLabel")
+	t1.Size = UDim2.new(1, -tx - 6, 0, 18)
+	t1.Position = UDim2.fromOffset(tx, 4)
+	t1.BackgroundTransparency = 1
+	t1.Font = Enum.Font.GothamBold
+	t1.TextSize = 12
+	t1.TextXAlignment = Enum.TextXAlignment.Left
+	t1.TextColor3 = col
+	t1.TextTruncate = Enum.TextTruncate.AtEnd
+	t1.Text = tostring(title)
+	t1.Parent = f
+	local t2 = Instance.new("TextLabel")
+	t2.Size = UDim2.new(1, -tx - 6, 0, 20)
+	t2.Position = UDim2.fromOffset(tx, 21)
+	t2.BackgroundTransparency = 1
+	t2.Font = Enum.Font.Gotham
+	t2.TextSize = 10
+	t2.TextXAlignment = Enum.TextXAlignment.Left
+	t2.TextColor3 = Color3.fromRGB(175, 175, 190)
+	t2.TextWrapped = true
+	t2.TextTruncate = Enum.TextTruncate.AtEnd
+	t2.Text = tostring(sub)
+	t2.Parent = f
+	task.spawn(function()
+		task.wait(4)
+		pcall(function()
+			TweenService:Create(f, TweenInfo.new(0.4), { BackgroundTransparency = 1 }):Play()
+		end)
+		task.wait(0.45)
+		pcall(function() f:Destroy() end)
+	end)
+end
+
+------------------------------------------------------------------
+-- THUMBS
+------------------------------------------------------------------
+local function makeModelThumb(parent, src, px, xo, yo)
+	local vf = Instance.new("ViewportFrame")
+	vf.Size = UDim2.fromOffset(px, px)
+	vf.Position = UDim2.fromOffset(xo, yo)
+	vf.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+	vf.BorderSizePixel = 0
+	vf.Ambient = Color3.fromRGB(190, 190, 205)
+	vf.LightColor = Color3.fromRGB(255, 255, 255)
+	vf.Parent = parent
+	Instance.new("UICorner", vf).CornerRadius = UDim.new(0, 6)
+	local ok, clone = pcall(function() return src:Clone() end)
+	if not ok or not clone then return vf end
+	local wm = Instance.new("WorldModel")
+	wm.Parent = vf
+	clone.Parent = wm
+	local center, size
+	if clone:IsA("Model") then
+		local okc, c, s = pcall(function() return clone:GetBoundingBox() end)
+		if okc and c then center, size = c, s end
+	else
+		center, size = clone.CFrame, clone.Size
+	end
+	if not center then return vf end
+	local md = math.max(size.X, size.Y, size.Z, 0.2)
+	local dir = Vector3.new(0.55, 0.35, 0.76).Unit
+	local cam = Instance.new("Camera")
+	cam.FieldOfView = 40
+	cam.CFrame = CFrame.lookAt(center.Position + dir * (md * 2.0 + 0.4), center.Position)
+	cam.Parent = vf
+	vf.CurrentCamera = cam
+	return vf
+end
+
+local function thumb(parent, px, xo, yo, img, model, col, letter)
+	if img then
+		local i = Instance.new("ImageLabel")
+		i.Size = UDim2.fromOffset(px, px)
+		i.Position = UDim2.fromOffset(xo, yo)
+		i.BackgroundColor3 = Color3.fromRGB(42, 42, 56)
+		i.Image = img
+		i.ScaleType = Enum.ScaleType.Fit
+		i.BorderSizePixel = 0
+		i.Parent = parent
+		Instance.new("UICorner", i).CornerRadius = UDim.new(0, 6)
+		return i
+	end
+	if model then return makeModelThumb(parent, model, px, xo, yo) end
+	local f = Instance.new("Frame")
+	f.Size = UDim2.fromOffset(px, px)
+	f.Position = UDim2.fromOffset(xo, yo)
+	f.BackgroundColor3 = col or Color3.fromRGB(42, 42, 56)
+	f.BackgroundTransparency = 0.55
+	f.BorderSizePixel = 0
+	f.Parent = parent
+	Instance.new("UICorner", f).CornerRadius = UDim.new(0, 6)
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.fromScale(1, 1)
+	l.BackgroundTransparency = 1
+	l.Font = Enum.Font.GothamBold
+	l.TextSize = math.max(12, math.floor(px * 0.42))
+	l.TextColor3 = col or Color3.fromRGB(205, 205, 220)
+	l.Text = letter or "?"
+	l.Parent = f
+	return f
+end
+
+------------------------------------------------------------------
+-- TEAM PICTURES (ภาพนิ่งแคช / การ์ด 2D)
+------------------------------------------------------------------
+local function invalidatePics()
+	for _, w in pairs(H.Portraits) do pcall(function() w:Destroy() end) end
+	H.Portraits = {}
+	H.PicMode = nil
+end
+
+local function buildPic(u, px)
+	local col = rcol(u.rarity)
+	local wrap = Instance.new("Frame")
+	wrap.Size = UDim2.fromOffset(px, px)
+	wrap.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+	wrap.BorderSizePixel = 0
+	wrap.Parent = stash
+	Instance.new("UICorner", wrap).CornerRadius = UDim.new(0, 7)
+	local stroke = Instance.new("UIStroke", wrap)
+	stroke.Color = col
+	stroke.Thickness = u.shiny and 2 or 1
+
+	local useModel = H.Flags.Pic == "photo" and H.Flags.Models and u.model ~= nil
+	if not useModel then
+		local g = Instance.new("Frame")
+		g.Size = UDim2.new(1, -2, 1, -2)
+		g.Position = UDim2.fromOffset(1, 1)
+		g.BackgroundColor3 = col
+		g.BackgroundTransparency = 0.55
+		g.BorderSizePixel = 0
+		g.Parent = wrap
+		Instance.new("UICorner", g).CornerRadius = UDim.new(0, 6)
+		local grad = Instance.new("UIGradient", g)
+		grad.Rotation = 90
+		grad.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, col),
+			ColorSequenceKeypoint.new(0.55, Color3.fromRGB(30, 30, 42)),
+			ColorSequenceKeypoint.new(1, col),
+		})
+		grad.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.1),
+			NumberSequenceKeypoint.new(0.55, 0.5),
+			NumberSequenceKeypoint.new(1, 0.1),
+		})
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.fromScale(1, 1)
+		l.BackgroundTransparency = 1
+		l.Font = Enum.Font.GothamBold
+		l.TextSize = math.floor(px * 0.42)
+		l.TextColor3 = Color3.fromRGB(255, 255, 255)
+		l.Text = string.upper(string.sub(tostring(u.name), 1, 1))
+		l.Parent = g
+		H.Portraits[u.uuid] = wrap
+		return wrap
+	end
+
+	local vf = Instance.new("ViewportFrame")
+	vf.Size = UDim2.new(1, -2, 1, -2)
+	vf.Position = UDim2.fromOffset(1, 1)
+	vf.BackgroundColor3 = Color3.fromRGB(34, 34, 46)
+	vf.BorderSizePixel = 0
+	vf.Ambient = Color3.fromRGB(195, 195, 210)
+	vf.LightColor = Color3.fromRGB(255, 255, 255)
+	vf.LightDirection = Vector3.new(-0.5, -0.8, -0.6)
+	vf.Parent = wrap
+	Instance.new("UICorner", vf).CornerRadius = UDim.new(0, 6)
+
+	local ok, clone = pcall(function() return u.model:Clone() end)
+	if not ok or not clone then
+		H.Portraits[u.uuid] = wrap
+		return wrap
+	end
+	for _, d in ipairs(clone:GetDescendants()) do
+		if d:IsA("Sound") or d:IsA("Script") or d:IsA("LocalScript") or d:IsA("ParticleEmitter")
+			or d:IsA("Trail") or d:IsA("Beam") or d:IsA("BillboardGui") then
+			pcall(function() d:Destroy() end)
+		end
+	end
+	local wm = Instance.new("WorldModel")
+	wm.Parent = vf
+	clone.Parent = wm
+
+	local head = clone:FindFirstChild("Head", true)
+	local target, dir, dist
+	if head and head:IsA("BasePart") then
+		local lv = head.CFrame.LookVector
+		if lv.Magnitude < 0.05 then lv = Vector3.new(0, 0, -1) end
+		local hs = math.max(head.Size.X, head.Size.Y, head.Size.Z, 0.5)
+		target = head.Position + Vector3.new(0, -hs * 0.35, 0)
+		dir = (lv.Unit * 0.94 + Vector3.new(0, 0.22, 0)).Unit
+		dist = hs * 3.4
+	else
+		local okc, c, s = pcall(function() return clone:GetBoundingBox() end)
+		if okc and c then
+			target = c.Position
+			dist = math.max(s.X, s.Y, s.Z) * 2.0
+			dir = Vector3.new(0.55, 0.35, 0.76).Unit
+		end
+	end
+	if target and dir and dist then
+		local cam = Instance.new("Camera")
+		cam.FieldOfView = 36
+		cam.CFrame = CFrame.lookAt(target + dir * dist, target)
+		cam.Parent = vf
+		vf.CurrentCamera = cam
+	end
+
+	H.Portraits[u.uuid] = wrap
+	return wrap
+end
+
+------------------------------------------------------------------
+-- LEVEL
+------------------------------------------------------------------
+local function levelState()
+	local st = { lobby = false, raw = nil, wave = 0, last = false, enemies = nil, bossLeft = nil }
+	local mc = workspace:FindFirstChild("_MAP_CONFIG")
+	if mc then
+		local isL = mc:FindFirstChild("IsLobby")
+		if isL and isL:IsA("BoolValue") then st.lobby = isL.Value == true end
+		local ok, d = pcall(function() return mc.GetLevelData:InvokeServer() end)
+		if ok and type(d) == "table" then st.raw = d end
+	end
+	local wv = workspace:FindFirstChild("_wave_num")
+	if wv and wv:IsA("ValueBase") then st.wave = tonumber(wv.Value) or 0 end
+	local il = workspace:FindFirstChild("_is_last_wave")
+	if il and il:IsA("ValueBase") then st.last = il.Value == true end
+	local gi = PG:FindFirstChild("GameLevelInfo")
+	if gi then
+		st.enemies = txt(gi, "List_rg.inner.scroll.EnemiesLeft.List.normal.remaining")
+		st.bossLeft = txt(gi, "List_rg.inner.scroll.EnemiesLeft.List.boss.remaining")
+	end
+	return st
+end
+
+local function guiUnitModels()
+	local map = {}
+	local su = PG:FindFirstChild("spawn_units")
+	local uf = su and idx(su, "Lives.Frame.Units")
+	if uf then
+		for _, slot in ipairs(uf:GetChildren()) do
+			local sn = tonumber(slot.Name)
+			if sn then
+				local view = slot:FindFirstChild("View", true)
+				local wm = view and view:FindFirstChildOfClass("WorldModel")
+				local mdl = wm and wm:FindFirstChildOfClass("Model")
+				if mdl then map[sn] = mdl end
+			end
+		end
+	end
+	return map
+end
+
+local function readTeam()
+	local out = {}
+	local p = findProfile()
+	if not p then return out end
+	local col = rawget(p, "collection")
+	if type(col) ~= "table" then return out end
+	local ou = rawget(col, "owned_units")
+	if type(ou) ~= "table" then return out end
+	local models = guiUnitModels()
+	local ingLv = rawget(col, "unit_ingame_levels")
+
+	local function push(slot, uuid)
+		local u = ou[uuid]
+		if type(u) ~= "table" then return end
+		local d = Units[u.unit_id]
+		local lv = "?"
+		if type(ingLv) == "table" and type(ingLv[uuid]) == "number" then
+			lv = tostring(math.floor(ingLv[uuid]))
+		end
+		out[slot] = {
+			slot = slot, uuid = uuid, id = u.unit_id,
+			name = (type(d) == "table" and d.name) or tostring(u.unit_id),
+			rarity = (type(d) == "table" and d.rarity) or "Common",
+			shiny = u.shiny == true, level = lv,
+			model = models[slot],
+		}
+	end
+
+	local eq = rawget(col, "equipped_units")
+	if type(eq) == "table" then
+		for slot, uuid in pairs(eq) do
+			local sn = tonumber(slot)
+			if sn and type(uuid) == "string" then push(sn, uuid) end
+		end
+	end
+	if next(out) == nil then
+		for uuid, u in pairs(ou) do
+			if type(u) == "table" and type(u.equipped_slot) == "number" then
+				push(u.equipped_slot, uuid)
+			end
+		end
+	end
+	return out
+end
+
+------------------------------------------------------------------
+-- BAG
+------------------------------------------------------------------
+function H.ReadBag()
+	local out = {}
+	local p = findProfile()
+	if not p then return out end
+	local inv = rawget(p, "inventory")
+	if type(inv) ~= "table" then return out end
+	local ni = rawget(inv, "normal_items")
+	if type(ni) == "table" then
+		for id, amt in pairs(ni) do
+			if type(id) == "string" then
+				local d = Items[id]
+				out[#out + 1] = {
+					kind = "item", id = id, qty = amt,
+					name = (type(d) == "table" and d.name) or id,
+					rarity = (type(d) == "table" and d.rarity) or "Common",
+					cat = tostring((type(d) == "table" and d.item_group) or "Other"),
+				}
+			end
+		end
+	end
+	local ui = rawget(inv, "unique_items")
+	if type(ui) == "table" then
+		local agg, order = {}, {}
+		for _, u in pairs(ui) do
+			if type(u) == "table" and type(u.item_id) == "string" then
+				if not agg[u.item_id] then
+					agg[u.item_id] = 0
+					order[#order + 1] = u.item_id
+				end
+				agg[u.item_id] = agg[u.item_id] + 1
+			end
+		end
+		for _, iid in ipairs(order) do
+			local d = Items[iid]
+			out[#out + 1] = {
+				kind = "special", id = iid, qty = agg[iid],
+				name = (type(d) == "table" and d.name) or iid,
+				rarity = (type(d) == "table" and d.rarity) or "Common",
+				cat = tostring((type(d) == "table" and d.item_group) or "Unique"),
+			}
+		end
+	end
+	local col = rawget(p, "collection")
+	local ou = type(col) == "table" and rawget(col, "owned_units") or {}
+	if type(ou) == "table" then
+		local agg, order = {}, {}
+		for _, u in pairs(ou) do
+			if type(u) == "table" and type(u.unit_id) == "string" then
+				local cur = agg[u.unit_id]
+				if not cur then
+					cur = { n = 0 }
+					agg[u.unit_id] = cur
+					order[#order + 1] = u.unit_id
+				end
+				cur.n = cur.n + 1
+			end
+		end
+		for _, uid in ipairs(order) do
+			local a = agg[uid]
+			local d = Units[uid]
+			out[#out + 1] = {
+				kind = "unit", id = uid, qty = a.n,
+				name = (type(d) == "table" and d.name) or uid,
+				rarity = (type(d) == "table" and d.rarity) or "Common",
+				cat = "Units", extra = "",
+			}
+		end
+	end
+	table.sort(out, function(a, b)
+		if a.cat ~= b.cat then return a.cat < b.cat end
+		return tostring(a.name) < tostring(b.name)
+	end)
+	H.Bag = out
+	return out
+end
+
+------------------------------------------------------------------
+-- REWARDS
+------------------------------------------------------------------
+local renderQueued = false
+local function queueRender()
+	if renderQueued then return end
+	renderQueued = true
+	task.delay(0.35, function()
+		renderQueued = false
+		pcall(H.Render)
+	end)
+end
+
+local function addReward(kind, label, amount, rarity, img, extra, id)
+	table.insert(H.Rewards, 1, {
+		t = stamp(), kind = kind, label = tostring(label), amount = tostring(amount),
+		rarity = rarity or "Common", img = img, extra = extra or "", id = id,
+		level = H.LevelName or "?",
+	})
+	while #H.Rewards > 220 do table.remove(H.Rewards) end
+	if H.Flags.Notify then
+		toast(label, tostring(amount) .. ((extra ~= nil and extra ~= "") and ("  •  " .. tostring(extra)) or ""), rcol(rarity), img)
+	end
+	queueRender()
+end
+
+local STAT_KEYS = {
+	gold_amount = { "Gold", "Legendary", "Gold" },
+	gem_amount = { "Gems", "Rare", "Gems" },
+	player_xp = { "XP", "Epic", "Jewels" },
+	resource = { "Resource", "Uncommon", "Jewels" },
+	trophies = { "Trophy", "Mythic", "HolidayStars" },
+	rebirth_tokens = { "Rebirth Token", "Secret", "_Trait" },
+	behelit_xp = { "Behelit XP", "Mythic", nil },
+	curse_reroll_tokens = { "Curse Token", "Epic", "_Trait" },
+	trait_reroll_tokens = { "Trait Token", "Epic", "_Trait" },
+}
+
+local function diffStats(old, new)
+	if type(old) ~= "table" then return end
+	for key, meta in pairs(STAT_KEYS) do
+		local o, n = old[key], new[key]
+		if type(o) == "number" and type(n) == "number" and n > o then
+			local d = n - o
+			if d >= 1 then
+				addReward("Currency", meta[1], "+" .. tostring(math.floor(d)), meta[2],
+					meta[3] and RES_ICON[meta[3]] or nil, "", nil)
+			end
+		end
+	end
+end
+
+local function diffProf(old, new)
+	if type(old) ~= "table" then return end
+	for id, amt in pairs(new.items) do
+		if type(amt) == "number" then
+			local o = old.items[id]
+			local d = o and (amt - o) or amt
+			if d and d > 0 then
+				local def = Items[id]
+				addReward("Item", (type(def) == "table" and def.name) or id, "+" .. tostring(math.floor(d)),
+					(type(def) == "table" and def.rarity) or "Common", itemImg(id),
+					(type(def) == "table" and def.item_group) or "Item", id)
+			end
+		end
+	end
+	for uuid, uid in pairs(new.units) do
+		if not old.units[uuid] then
+			local def = Units[uid]
+			addReward("Unit", (type(def) == "table" and def.name) or uid, "ได้ใหม่!",
+				(type(def) == "table" and def.rarity) or "Common", nil, "Unit", uid)
+		end
+	end
+	for uuid, iid in pairs(new.uniques) do
+		if not old.uniques[uuid] then
+			local def = Items[iid]
+			addReward("Special", (type(def) == "table" and def.name) or iid, "ได้ใหม่!",
+				(type(def) == "table" and def.rarity) or "Common", itemImg(iid),
+				(type(def) == "table" and def.item_group) or "Special", iid)
+		end
+	end
+end
+
+local RESULT_FIELDS = {
+	{ "Gold", "Holder.LevelRewards.ScrollingFrame.GoldReward.Main.Amount", "Holder.LevelRewards.ScrollingFrame.GoldReward.ImageLabel", "Legendary", "Gold" },
+	{ "Gems", "Holder.LevelRewards.ScrollingFrame.GemReward.Main.Amount", "Holder.LevelRewards.ScrollingFrame.GemReward.ImageLabel", "Rare", "Gems" },
+	{ "XP", "Holder.LevelRewards.ScrollingFrame.XPReward.Main.Amount", "Holder.LevelRewards.ScrollingFrame.XPReward.ImageLabel", "Epic", "Jewels" },
+	{ "Resource", "Holder.LevelRewards.ScrollingFrame.Configuration.ResourceReward.Main.Amount", "Holder.LevelRewards.ScrollingFrame.Configuration.ResourceReward.ImageLabel", "Uncommon", "Jewels" },
+	{ "Trophy", "Holder.LevelRewards.ScrollingFrame.TrophyReward.Main.Amount", "Holder.LevelRewards.ScrollingFrame.TrophyReward.ImageLabel", "Mythic", "HolidayStars" },
+	{ "First Clear Gems", "Holder.Middle.FirstCompletion.GemReward.Main.Amount", "Holder.Middle.FirstCompletion.GemReward.ImageLabel", "Secret", "Gems" },
+}
+
+local function captureResults()
+	local g = PG:FindFirstChild("ResultsUI")
+	if not g or not g.Enabled then
+		H.ResultsSeen = false
+		return false
+	end
+	if H.ResultsSeen then return false end
+	local got = 0
+	local lvl = txt(g, "Holder.LevelName") or H.LevelName or "?"
+	for _, f in ipairs(RESULT_FIELDS) do
+		local v = txt(g, f[2])
+		if v and v ~= "" and v ~= "0" then
+			addReward("Reward", f[1], v, f[4], imgOf(g, f[3]) or (f[5] and RES_ICON[f[5]] or nil), lvl, nil)
+			got = got + 1
+		end
+	end
+	local waves = txt(g, "Holder.Middle.WavesCompleted")
+	local timer = txt(g, "Holder.Middle.Timer")
+	if waves or timer then
+		addReward("Info", "สรุปด่าน", tostring(waves or "") .. "  " .. tostring(timer or ""), "Rare", H.MapImg, lvl, nil)
+		got = got + 1
+	end
+	if got == 0 then
+		local seen, n = {}, 0
+		for _, d in ipairs(g:GetDescendants()) do
+			if d:IsA("TextLabel") and d.Visible and type(d.Text) == "string" and d.Text:find("%d") and n < 14 then
+				local pn = d.Parent and d.Parent.Name or ""
+				local key = pn .. "|" .. d.Text
+				if not seen[key] then
+					seen[key] = true
+					n = n + 1
+					addReward("Info", pn, d.Text, "Rare", nil, lvl, nil)
+				end
+			end
+		end
+		got = n
+	end
+	H.ResultsSeen = true
+	if got > 0 then
+		toast("จบด่าน: " .. tostring(lvl), "รวมรางวัล " .. tostring(got) .. " รายการ", Color3.fromRGB(120, 215, 255), H.MapImg)
+		H.Tab = "reward"
+	end
+	return got > 0
+end
+
+------------------------------------------------------------------
+-- RENDER
+------------------------------------------------------------------
+local function clearContent()
+	for _, w in pairs(H.Portraits) do
+		if w and w.Parent ~= stash then pcall(function() w.Parent = stash end) end
+	end
+	for _, c in ipairs(content:GetChildren()) do
+		if c:IsA("GuiObject") then c:Destroy() end
+	end
+end
+local function header(text, col)
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.new(1, 0, 0, 20)
+	l.BackgroundTransparency = 1
+	l.Font = Enum.Font.GothamBold
+	l.TextSize = 12
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextColor3 = col or Color3.fromRGB(140, 140, 168)
+	l.Text = "  " .. text
+	l.Parent = content
+	return l
+end
+local function note(text)
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.new(1, 0, 0, 34)
+	l.BackgroundTransparency = 1
+	l.Font = Enum.Font.Gotham
+	l.TextSize = 11
+	l.TextWrapped = true
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextColor3 = Color3.fromRGB(180, 180, 195)
+	l.Text = "  " .. text
+	l.Parent = content
+	return l
+end
+local function box(h)
+	local r = Instance.new("Frame")
+	r.Size = UDim2.new(1, 0, 0, h or 40)
+	r.BackgroundColor3 = Color3.fromRGB(34, 34, 45)
+	r.BorderSizePixel = 0
+	r.Parent = content
+	Instance.new("UICorner", r).CornerRadius = UDim.new(0, 7)
+	return r
+end
+local function twoLine(parent, title, sub, col, xo, rightText)
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.new(1, -(xo + 54), 0, 18)
+	t.Position = UDim2.fromOffset(xo, 4)
+	t.BackgroundTransparency = 1
+	t.Font = Enum.Font.GothamBold
+	t.TextSize = 12
+	t.TextXAlignment = Enum.TextXAlignment.Left
+	t.TextColor3 = col
+	t.TextTruncate = Enum.TextTruncate.AtEnd
+	t.Text = tostring(title)
+	t.Parent = parent
+	local s = Instance.new("TextLabel")
+	s.Size = UDim2.new(1, -(xo + 8), 0, 16)
+	s.Position = UDim2.fromOffset(xo, 21)
+	s.BackgroundTransparency = 1
+	s.Font = Enum.Font.Gotham
+	s.TextSize = 10
+	s.TextXAlignment = Enum.TextXAlignment.Left
+	s.TextColor3 = Color3.fromRGB(165, 165, 185)
+	s.TextTruncate = Enum.TextTruncate.AtEnd
+	s.Text = tostring(sub)
+	s.Parent = parent
+	if rightText then
+		local r = Instance.new("TextLabel")
+		r.Size = UDim2.fromOffset(50, 40)
+		r.Position = UDim2.new(1, -52, 0, 0)
+		r.BackgroundTransparency = 1
+		r.Font = Enum.Font.GothamBold
+		r.TextSize = 11
+		r.TextXAlignment = Enum.TextXAlignment.Right
+		r.TextColor3 = Color3.fromRGB(238, 238, 248)
+		r.TextTruncate = Enum.TextTruncate.AtEnd
+		r.Text = tostring(rightText)
+		r.Parent = parent
+	end
+	return t, s
+end
+
+function H.Render()
+	if not H.Running then return end
+	clearContent()
+	for k, b in pairs(tabBtns) do
+		b.BackgroundColor3 = (k == H.Tab) and Color3.fromRGB(70, 90, 190) or Color3.fromRGB(38, 38, 52)
+	end
+
+	if H.Tab == "level" then
+		local st = H.State
+		if not st or not st.raw then
+			header("ไม่พบข้อมูลด่าน")
+			note("อยู่ในล็อบบี้ = ปกติ กด 'รีเฟรช' อีกครั้งตอนเข้าด่านแล้ว")
+		else
+			local d = st.raw
+			header("ด่านปัจจุบัน", Color3.fromRGB(140, 200, 255))
+			local rows = {
+				{ "ชื่อด่าน", tostring(d.name) },
+				{ "ID", tostring(d.id) },
+				{ "โลก", tostring(d.world) },
+				{ "แผนที่", tostring(d.map) },
+				{ "โหมด", tostring(d._gamemode) },
+				{ "ความยาก", tostring(d._difficulty) },
+				{ "สถานที่", tostring(d._location_name) },
+				{ "Boss", tostring(d.boss or "-") },
+				{ "Wave", "รอบ " .. tostring(st.wave) .. (st.last and " (สุดท้าย)" or "") },
+				{ "ศัตรูเหลือ", tostring(st.enemies or "?") .. "  บอส: " .. tostring(st.bossLeft or "?") },
+			}
+			for _, r in ipairs(rows) do
+				local b = box(26)
+				local k = Instance.new("TextLabel")
+				k.Size = UDim2.new(0, 104, 1, 0)
+				k.BackgroundTransparency = 1
+				k.Font = Enum.Font.GothamBold
+				k.TextSize = 11
+				k.TextXAlignment = Enum.TextXAlignment.Left
+				k.TextColor3 = Color3.fromRGB(150, 150, 178)
+				k.Text = "  " .. r[1]
+				k.Parent = b
+				local v = Instance.new("TextLabel")
+				v.Size = UDim2.new(1, -110, 1, 0)
+				v.Position = UDim2.fromOffset(106, 0)
+				v.BackgroundTransparency = 1
+				v.Font = Enum.Font.Gotham
+				v.TextSize = 11
+				v.TextXAlignment = Enum.TextXAlignment.Left
+				v.TextColor3 = Color3.fromRGB(235, 235, 245)
+				v.TextTruncate = Enum.TextTruncate.AtEnd
+				v.Text = r[2]
+				v.Parent = b
+			end
+		end
+
+	elseif H.Tab == "reward" then
+		header("ของที่ได้ล่าสุด (" .. #H.Rewards .. ")")
+		if #H.Rewards == 0 then
+			note("ยังไม่มีรายการ — จบด่านแล้วระบบดึง Gold/Gems/XP/Resource/Trophy + ไอเทม/ยูนิตที่ได้จากการเทียบกระเป๋าให้ครบ")
+		end
+		local budget = 12
+		for i = 1, math.min(#H.Rewards, 120) do
+			local e = H.Rewards[i]
+			local r = box(44)
+			r.LayoutOrder = i
+			local src = itemModel(e.id)
+			if src and budget <= 0 then src = nil end
+			if src then budget = budget - 1 end
+			thumb(r, 34, 5, 5, e.img, src, rcol(e.rarity), string.sub(tostring(e.label), 1, 1))
+			twoLine(r, e.label, e.t .. "  •  " .. tostring(e.kind) .. ((e.extra ~= nil and e.extra ~= "") and ("  •  " .. e.extra) or ""), rcol(e.rarity), 46, e.amount)
+		end
+
+	elseif H.Tab == "team" then
+		if H.PicMode ~= H.Flags.Pic then invalidatePics() end
+		H.PicMode = H.Flags.Pic
+		local list = {}
+		for slot = 1, 6 do
+			if H.Team[slot] then list[#list + 1] = H.Team[slot] end
+		end
+		header("ทีมที่ใส่ (" .. #list .. "/6)  •  " .. (H.Flags.Pic == "photo" and "ภาพนิ่ง" or "การ์ด 2D"))
+		if #list == 0 then note("ไม่พบทีม — กด 'รีเฟรช' หรือเข้าหน้าหลักของเกมก่อน") end
+		for i, u in ipairs(list) do
+			local r = box(62)
+			r.LayoutOrder = i
+			local pic = H.Portraits[u.uuid]
+			if not pic or not pic.Parent then pic = buildPic(u, 52) end
+			pic.Parent = r
+			pic.Position = UDim2.fromOffset(6, 5)
+			local sub = tostring(u.rarity) .. "  •  ช่อง " .. tostring(u.slot) .. "  •  Lv." .. tostring(u.level)
+			if u.shiny then sub = sub .. "  •  Shiny" end
+			twoLine(r, tostring(u.name), sub, rcol(u.rarity), 66, nil)
+		end
+
+	elseif H.Tab == "bag" then
+		header("กระเป๋า (" .. #H.Bag .. " รายการ)")
+		if #H.Bag == 0 then
+			note("กด 'อ่านกระเป๋า' เพื่อโหลดของทั้งหมดจาก memory")
+		end
+		local budget = 24
+		local lastCat, order = nil, 0
+		for _, e in ipairs(H.Bag) do
+			order = order + 1
+			if e.cat ~= lastCat then
+				lastCat = e.cat
+				local h = header("▸ " .. tostring(e.cat), Color3.fromRGB(160, 200, 255))
+				h.LayoutOrder = order
+				order = order + 1
+			end
+			local r = box(44)
+			r.LayoutOrder = order
+			local src = nil
+			if e.kind ~= "unit" then
+				src = itemModel(e.id)
+				if src and budget <= 0 then src = nil end
+				if src then budget = budget - 1 end
+			end
+			thumb(r, 34, 5, 5, itemImg(e.id), src, rcol(e.rarity), string.sub(tostring(e.name), 1, 1))
+			local sub = tostring(e.rarity) .. (e.kind == "unit" and "" or ("  •  " .. tostring(e.cat)))
+			twoLine(r, e.name, sub, rcol(e.rarity), 46, "x" .. tostring(e.qty))
+		end
+	end
+end
+
+------------------------------------------------------------------
+-- LOOP
+------------------------------------------------------------------
+local function updateLocation()
+	local st = levelState()
+	H.State = st
+	local d = st.raw
+	if st.lobby or not d then
+		H.LevelName = "Lobby"
+		H.MapImg = mapImage(nil, nil)
+		locTitle.Text = "ล็อบบี้"
+		locSub.Text = "ยังไม่ได้อยู่ในด่าน\nเลือกด่านจาก Level Select"
+	else
+		H.LevelName = tostring(d.name)
+		H.MapImg = mapImage(d.map, d.world)
+		locTitle.Text = tostring(d.name) .. (d.world and ("  •  " .. tostring(d.world)) or "")
+		locSub.Text = "แผนที่ " .. tostring(d.map) .. "  •  " .. tostring(d._difficulty or "?") ..
+			"\nBoss " .. tostring(d.boss or "-") .. "  •  Wave " .. tostring(st.wave) ..
+			(st.enemies and ("  •  เหลือ " .. tostring(st.enemies)) or "")
+	end
+	locImg.Image = H.MapImg or ""
+end
+
+H.LastStats = snapStats()
+H.LastProf = snapProf()
+
+task.spawn(function()
+	local t = 0
+	while H.Running do
+		if t % 3 == 0 then pcall(updateLocation) end
+		pcall(function()
+			local now = snapStats()
+			diffStats(H.LastStats, now)
+			H.LastStats = now
+		end)
+		if t % 2 == 0 then
+			pcall(function()
+				local np = snapProf()
+				diffProf(H.LastProf, np)
+				H.LastProf = np
+			end)
+		end
+		pcall(captureResults)
+		if t % 5 == 0 then
+			pcall(function()
+				H.Team = readTeam()
+				local lv = txt(PG:FindFirstChild("spawn_units"), "Main.Desc.Level")
+				footer.Text = string.format("ด่าน: %s   Lv.%s\nGold %s  •  Gems %s  •  XP %s",
+					tostring(H.LevelName), tostring(lv or "?"),
+					tostring(math.floor(H.LastStats.gold_amount or 0)),
+					tostring(math.floor(H.LastStats.gem_amount or 0)),
+					tostring(math.floor(H.LastStats.player_xp or 0)))
+			end)
+		end
+		if H.Tab == "level" and t % 9 == 0 then pcall(H.Render) end
+		t = t + 1
+		task.wait(1)
+	end
+end)
+
+------------------------------------------------------------------
+-- BUTTONS
+------------------------------------------------------------------
+act("รีเฟรช", function()
+	pcall(updateLocation)
+	invalidatePics()
+	H.Team = readTeam()
+	pcall(H.Render)
+	toast("รีเฟรชแล้ว", tostring(H.LevelName) .. "  •  ทีม " .. #readTeam() .. "/6", Color3.fromRGB(130, 190, 255), H.MapImg)
+end)
+local ntBtn = act("แจ้งเตือน: เปิด", function()
+	H.Flags.Notify = not H.Flags.Notify
+	ntBtn.Text = "แจ้งเตือน: " .. (H.Flags.Notify and "เปิด" or "ปิด")
+end)
+local picBtn = act("รูปทีม: ภาพนิ่ง", function()
+	H.Flags.Pic = (H.Flags.Pic == "photo") and "card" or "photo"
+	picBtn.Text = "รูปทีม: " .. (H.Flags.Pic == "photo" and "ภาพนิ่ง" or "การ์ด 2D")
+	invalidatePics()
+	H.PicMode = H.Flags.Pic
+	H.Tab = "team"
+	pcall(H.Render)
+end)
+act("อ่านกระเป๋า", function()
+	task.spawn(function()
+		pcall(H.ReadBag)
+		H.Tab = "bag"
+		pcall(H.Render)
+		toast("อ่านกระเป๋าเสร็จ", #H.Bag .. " รายการ", Color3.fromRGB(140, 210, 255), nil)
+	end)
+end)
+act("ทีม 6", function() H.Team = readTeam(); H.Tab = "team"; pcall(H.Render) end)
+act("ล้างประวัติ", function()
+	H.Rewards = {}
+	H.LastStats = snapStats()
+	H.LastProf = snapProf()
+	pcall(H.Render)
+end)
+
+function H.Stop()
+	H.Running = false
+	pcall(function() gui:Destroy() end)
+	pcall(function() toastGui:Destroy() end)
+end
+
+------------------------------------------------------------------
+-- BOOT
+------------------------------------------------------------------
+H.Team = readTeam()
+pcall(H.ReadBag)
+pcall(updateLocation)
+H.PicMode = H.Flags.Pic
+pcall(H.Render)
+
+local nteam = 0
+for slot = 1, 6 do if H.Team[slot] then nteam = nteam + 1 end end
+toast("2K Scout พร้อม", "ทีม " .. nteam .. "/6  •  กระเป๋า " .. #H.Bag .. " รายการ", Color3.fromRGB(120, 200, 255), H.MapImg)

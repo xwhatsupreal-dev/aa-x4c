@@ -33,9 +33,9 @@ export function ShareModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ syncKey, accountId: account.accountId }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.shareId) {
-        setError(data.error || 'ไม่สามารถสร้างลิ้งค์แชร์ได้');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.shareId) {
+        setError(data?.error || `ไม่สามารถสร้างลิ้งค์แชร์ได้ (HTTP ${res.status})`);
         return;
       }
       const params = new URLSearchParams({ share: data.shareId });

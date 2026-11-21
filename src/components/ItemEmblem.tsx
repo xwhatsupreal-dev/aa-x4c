@@ -1,5 +1,6 @@
 import {
   Box,
+  Coins,
   Compass,
   Crown,
   Flame,
@@ -9,13 +10,14 @@ import {
   Shirt,
   Sparkles,
   Swords,
+  Trophy,
   Utensils,
 } from 'lucide-react';
 import { RARITY_META } from '../data/aaCatalog.ts';
 import type { Rarity } from '../types.ts';
 
 interface ItemEmblemProps {
-  kind: 'unit' | 'item';
+  kind: 'unit' | 'item' | 'currency';
   group?: string;
   rarity: Rarity;
   name: string;
@@ -43,6 +45,13 @@ export function ItemEmblem({
   const iconSize = size === 'sm' ? 15 : size === 'lg' ? 21 : 18;
 
   const renderGlyph = () => {
+    if (kind === 'currency') {
+      const lower = name.toLowerCase();
+      if (lower.includes('gem')) return <Gem size={iconSize} strokeWidth={1.9} />;
+      if (lower.includes('gold')) return <Coins size={iconSize} strokeWidth={1.9} />;
+      if (lower.includes('trophy')) return <Trophy size={iconSize} strokeWidth={1.9} />;
+      return <Sparkles size={iconSize} strokeWidth={1.9} />;
+    }
     if (kind === 'unit') {
       if (rarity === 'Secret') return <Crown size={iconSize} strokeWidth={1.9} />;
       if (rarity === 'Exclusive') return <Sparkles size={iconSize} strokeWidth={1.9} />;
