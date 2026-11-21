@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 type Rarity =
@@ -133,20 +134,53 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-const memoryRooms: Record<string, Record<string, AccountSnapshot>> = {};
-const memoryShares: Record<string, ShareRecord> = {};
+const TMP_STORE_PATH = '/tmp/aa-vault-store.json';
+
+interface LocalTmpStore {
+  rooms: Record<string, Record<string, AccountSnapshot>>;
+  shares: Record<string, ShareRecord>;
+}
+
+let tmpCache: LocalTmpStore | null = null;
+
+function loadTmpStore(): LocalTmpStore {
+  if (tmpCache) return tmpCache;
+  try {
+    if (fs.existsSync(TMP_STORE_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(TMP_STORE_PATH, 'utf-8')) as LocalTmpStore;
+      if (parsed && typeof parsed.rooms === 'object' && typeof parsed.shares === 'object') {
+        tmpCache = parsed;
+        return tmpCache;
+      }
+    }
+  } catch {
+    // ignore corrupt tmp cache
+  }
+  tmpCache = { rooms: {}, shares: {} };
+  return tmpCache;
+}
+
+function saveTmpStore(next: LocalTmpStore) {
+  tmpCache = next;
+  try {
+    fs.writeFileSync(TMP_STORE_PATH, JSON.stringify(next), 'utf-8');
+  } catch {
+    // ignore fs write errors
+  }
+}
 
 function sendJson(res: ServerResponse, data: unknown, status = 200) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
     ...CORS_HEADERS,
   });
   res.end(JSON.stringify(data));
 }
 
 function sanitizeKey(raw: unknown): string {
-  if (typeof raw !== 'string') return '';
-  return raw.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+  if (typeof raw !== 'string') return 'main';
+  return raw.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'main';
 }
 
 function normalizeRarity(input?: string): Rarity {
@@ -304,6 +338,17 @@ async function readBodyText(req: Req): Promise<string> {
   });
 }
 
+// 1) Upstash Redis / Vercel KV (automatically available via 1-click Vercel Storage Marketplace)
+function getRedisConfig() {
+  const url = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+  const token = (process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+  if (url && token) return { url, token };
+  return null;
+}
+
+// 2) Direct Cloudflare KV REST API (if configured via Vercel Env)
 function getCfKvConfig() {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
   const namespaceId = process.env.CLOUDFLARE_KV_NAMESPACE_ID?.trim();
@@ -314,46 +359,87 @@ function getCfKvConfig() {
   return null;
 }
 
-async function kvGet<T>(key: string): Promise<T | null> {
-  const cf = getCfKvConfig();
-  if (!cf) {
-    if (key.startsWith('room:')) {
-      return (memoryRooms[key.slice(5)] as unknown as T) ?? null;
-    }
-    if (key.startsWith('share:')) {
-      return (memoryShares[key.slice(6)] as unknown as T) ?? null;
-    }
-    return null;
-  }
-  const url = `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/storage/kv/namespaces/${cf.namespaceId}/values/${encodeURIComponent(key)}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${cf.apiToken}` },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Cloudflare KV GET failed: ${res.status}`);
-  return (await res.json()) as T;
+function detectProvider(): { name: string; persistent: boolean } {
+  if (getRedisConfig()) return { name: 'vercel-kv', persistent: true };
+  if (getCfKvConfig()) return { name: 'cloudflare-kv-vercel', persistent: true };
+  return { name: 'vercel-builtin', persistent: false };
 }
 
-async function kvPut(key: string, value: unknown): Promise<void> {
+async function storeGet<T>(key: string): Promise<T | null> {
+  const redis = getRedisConfig();
+  if (redis) {
+    const res = await fetch(redis.url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${redis.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(['GET', key]),
+    });
+    if (!res.ok) throw new Error(`Redis GET failed: ${res.status}`);
+    const data = (await res.json()) as { result?: string | null };
+    if (!data.result) return null;
+    return JSON.parse(data.result) as T;
+  }
+
   const cf = getCfKvConfig();
-  if (!cf) {
-    if (key.startsWith('room:')) {
-      memoryRooms[key.slice(5)] = value as Record<string, AccountSnapshot>;
-    } else if (key.startsWith('share:')) {
-      memoryShares[key.slice(6)] = value as ShareRecord;
-    }
+  if (cf) {
+    const url = `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/storage/kv/namespaces/${cf.namespaceId}/values/${encodeURIComponent(key)}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${cf.apiToken}` },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Cloudflare KV GET failed: ${res.status}`);
+    return (await res.json()) as T;
+  }
+
+  const tmp = loadTmpStore();
+  if (key.startsWith('room:')) {
+    return (tmp.rooms[key.slice(5)] as unknown as T) ?? null;
+  }
+  if (key.startsWith('share:')) {
+    return (tmp.shares[key.slice(6)] as unknown as T) ?? null;
+  }
+  return null;
+}
+
+async function storePut(key: string, value: unknown): Promise<void> {
+  const redis = getRedisConfig();
+  if (redis) {
+    const res = await fetch(redis.url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${redis.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(['SET', key, JSON.stringify(value)]),
+    });
+    if (!res.ok) throw new Error(`Redis SET failed: ${res.status}`);
     return;
   }
-  const url = `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/storage/kv/namespaces/${cf.namespaceId}/values/${encodeURIComponent(key)}`;
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${cf.apiToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(value),
-  });
-  if (!res.ok) throw new Error(`Cloudflare KV PUT failed: ${res.status}`);
+
+  const cf = getCfKvConfig();
+  if (cf) {
+    const url = `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/storage/kv/namespaces/${cf.namespaceId}/values/${encodeURIComponent(key)}`;
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${cf.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(value),
+    });
+    if (!res.ok) throw new Error(`Cloudflare KV PUT failed: ${res.status}`);
+    return;
+  }
+
+  const tmp = loadTmpStore();
+  if (key.startsWith('room:')) {
+    tmp.rooms[key.slice(5)] = value as Record<string, AccountSnapshot>;
+  } else if (key.startsWith('share:')) {
+    tmp.shares[key.slice(6)] = value as ShareRecord;
+  }
+  saveTmpStore(tmp);
 }
 
 export default async function handler(req: Req, res: ServerResponse) {
@@ -366,7 +452,7 @@ export default async function handler(req: Req, res: ServerResponse) {
   const parsedUrl = new URL(req.url || '/', 'http://localhost');
   const pathname = parsedUrl.pathname.replace(/\/+$/, '') || '/';
 
-  // Mode 1: Proxy to configured Cloudflare Worker URL if set in Vercel Env
+  // Optional transparent proxy to Cloudflare Worker if set in Vercel Environment Variables
   const workerProxyBase = (
     process.env.CLOUDFLARE_WORKER_URL || process.env.VITE_CLOUDFLARE_WORKER_URL || ''
   )
@@ -386,6 +472,7 @@ export default async function handler(req: Req, res: ServerResponse) {
       const text = await upstream.text();
       res.writeHead(upstream.status, {
         'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
         ...CORS_HEADERS,
       });
       res.end(text);
@@ -395,15 +482,19 @@ export default async function handler(req: Req, res: ServerResponse) {
     return;
   }
 
-  const hasDirectCfKv = Boolean(getCfKvConfig());
+  const provider = detectProvider();
 
   try {
-    if (req.method === 'GET' && (pathname === '/api' || pathname === '/api/index' || pathname === '/api/health')) {
+    if (
+      req.method === 'GET' &&
+      (pathname === '/api' || pathname === '/api/index' || pathname === '/api/health')
+    ) {
       sendJson(res, {
         ok: true,
         serverless: true,
-        provider: hasDirectCfKv ? 'cloudflare-kv-vercel' : 'vercel-ephemeral',
-        kvBound: hasDirectCfKv,
+        provider: provider.name,
+        persistent: provider.persistent,
+        kvBound: provider.persistent,
         timestamp: Date.now(),
       });
       return;
@@ -411,13 +502,9 @@ export default async function handler(req: Req, res: ServerResponse) {
 
     if (req.method === 'GET' && pathname === '/api/accounts') {
       const syncKey = sanitizeKey(parsedUrl.searchParams.get('key'));
-      if (!syncKey) {
-        sendJson(res, { syncKey: '', accounts: [] });
-        return;
-      }
-      const room = (await kvGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
+      const room = (await storeGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
       const accounts = Object.values(room).sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
-      sendJson(res, { syncKey, accounts });
+      sendJson(res, { syncKey, accounts, provider: provider.name });
       return;
     }
 
@@ -431,16 +518,12 @@ export default async function handler(req: Req, res: ServerResponse) {
         return;
       }
       const syncKey = sanitizeKey(body?.syncKey || parsedUrl.searchParams.get('key'));
-      if (!syncKey) {
-        sendJson(res, { error: 'Missing syncKey' }, 400);
-        return;
-      }
       if (!body?.username || typeof body.username !== 'string') {
         sendJson(res, { error: 'Missing username' }, 400);
         return;
       }
 
-      const room = (await kvGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
+      const room = (await storeGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
       const accountId =
         body.username.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'player';
       const existing = room[accountId];
@@ -448,11 +531,11 @@ export default async function handler(req: Req, res: ServerResponse) {
 
       const updated = buildSnapshot(body, existing);
       room[updated.accountId] = updated;
-      await kvPut(`room:${syncKey}`, room);
+      await storePut(`room:${syncKey}`, room);
 
       sendJson(res, {
         ok: true,
-        provider: hasDirectCfKv ? 'cloudflare-kv-vercel' : 'vercel-ephemeral',
+        provider: provider.name,
         syncKey,
         accountId: updated.accountId,
         lastSyncedAt: updated.lastSyncedAt,
@@ -465,18 +548,14 @@ export default async function handler(req: Req, res: ServerResponse) {
     if (req.method === 'POST' && clearMatch) {
       const accountId = decodeURIComponent(clearMatch[1]);
       const syncKey = sanitizeKey(parsedUrl.searchParams.get('key'));
-      if (!syncKey) {
-        sendJson(res, { error: 'Missing syncKey' }, 400);
-        return;
-      }
-      const room = (await kvGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
+      const room = (await storeGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
       if (!room[accountId]) {
         sendJson(res, { error: 'Account not found' }, 404);
         return;
       }
       room[accountId].rewards = [];
       room[accountId].totals = {};
-      await kvPut(`room:${syncKey}`, room);
+      await storePut(`room:${syncKey}`, room);
       sendJson(res, { ok: true, account: room[accountId] });
       return;
     }
@@ -485,14 +564,10 @@ export default async function handler(req: Req, res: ServerResponse) {
     if (req.method === 'DELETE' && delMatch) {
       const accountId = decodeURIComponent(delMatch[1]);
       const syncKey = sanitizeKey(parsedUrl.searchParams.get('key'));
-      if (!syncKey) {
-        sendJson(res, { error: 'Missing syncKey' }, 400);
-        return;
-      }
-      const room = (await kvGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
+      const room = (await storeGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
       if (room[accountId]) {
         delete room[accountId];
-        await kvPut(`room:${syncKey}`, room);
+        await storePut(`room:${syncKey}`, room);
       }
       sendJson(res, { ok: true });
       return;
@@ -509,7 +584,7 @@ export default async function handler(req: Req, res: ServerResponse) {
       }
       const syncKey = sanitizeKey(body?.syncKey);
       const accountId = String(body?.accountId || '');
-      const room = (await kvGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
+      const room = (await storeGet<Record<string, AccountSnapshot>>(`room:${syncKey}`)) || {};
       const account = room[accountId];
       if (!account) {
         sendJson(res, { error: 'ไม่พบข้อมูลบัญชีที่ต้องการแชร์' }, 404);
@@ -517,7 +592,7 @@ export default async function handler(req: Req, res: ServerResponse) {
       }
       const shareId = crypto.randomBytes(5).toString('hex');
       const record: ShareRecord = { shareId, createdAt: Date.now(), account };
-      await kvPut(`share:${shareId}`, record);
+      await storePut(`share:${shareId}`, record);
       sendJson(res, { ok: true, shareId, createdAt: record.createdAt });
       return;
     }
@@ -525,7 +600,7 @@ export default async function handler(req: Req, res: ServerResponse) {
     const shareMatch = pathname.match(/^\/api\/share\/([^/]+)$/);
     if (req.method === 'GET' && shareMatch) {
       const shareId = decodeURIComponent(shareMatch[1]);
-      const record = await kvGet<ShareRecord>(`share:${shareId}`);
+      const record = await storeGet<ShareRecord>(`share:${shareId}`);
       if (!record) {
         sendJson(res, { error: 'ไม่พบลิ้งค์เช็คของนี้ หรือลิ้งค์หมดอายุแล้ว' }, 404);
         return;

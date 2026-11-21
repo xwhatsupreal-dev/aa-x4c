@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Backpack,
-  ClipboardPaste,
-  Cloud,
+  Code2,
   History,
   Menu,
   Share2,
@@ -28,23 +27,29 @@ interface ToastNotification {
   border: string;
 }
 
-const STORAGE_KEY = 'aa_vault_sync_key';
+const STORAGE_KEY = 'aa_vault_sync_key_v2';
 const CF_STORAGE_KEY = 'aa_vault_cf_worker_url';
 
 const TAB_TITLES: Record<NavTab, string> = {
   overview: 'ภาพรวม & ทีม 6 ตัว',
   inventory: 'กระเป๋าไอเทม',
   drops: 'ประวัติของที่ได้',
-  sync: 'Cloudflare & สคริปต์ Lua',
+  sync: 'สคริปต์เชื่อมต่อเกม',
 };
 
 function getInitialSyncKey(): string {
-  if (typeof window === 'undefined') return 'aa-vault';
+  if (typeof window === 'undefined') return 'main';
+  const fromQuery = new URLSearchParams(window.location.search).get('key');
+  if (fromQuery) {
+    const cleaned = fromQuery.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+    if (cleaned) {
+      localStorage.setItem(STORAGE_KEY, cleaned);
+      return cleaned;
+    }
+  }
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved && saved !== 'demo-aa-2k') return saved;
-  const generated = `aa-${Math.random().toString(36).slice(2, 8)}`;
-  localStorage.setItem(STORAGE_KEY, generated);
-  return generated;
+  return 'main';
 }
 
 function getInitialCloudflareUrl(): string {
@@ -72,7 +77,6 @@ export default function App() {
 
   const [syncKey, setSyncKey] = useState<string>(getInitialSyncKey);
   const [cloudflareUrl, setCloudflareUrl] = useState<string>(getInitialCloudflareUrl);
-  const [cloudflareHealthy, setCloudflareHealthy] = useState<boolean | null>(null);
 
   const [accounts, setAccounts] = useState<AccountSnapshot[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
@@ -85,13 +89,15 @@ export default function App() {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
   const [liveConnected, setLiveConnected] = useState(false);
+  const [backendProvider, setBackendProvider] = useState<string>('');
+  const [isServerlessBackend, setIsServerlessBackend] = useState<boolean>(false);
 
   const toastTimeouts = useRef<number[]>([]);
   const hasAutoSwitchedToSync = useRef(false);
   const seenRewardsRef = useRef<Set<string>>(new Set());
   const initialPollDoneRef = useRef(false);
 
-  // Active API base URL: Cloudflare Worker if connected, otherwise local Express server
+  // Automatic zero-config API base: defaults directly to the site's own /api/* (Vercel or Express)
   const activeApiBase = shareId ? shareCfUrl || cloudflareUrl : cloudflareUrl;
 
   const pushSystemToast = useCallback((title: string, subtitle: string, ok = true) => {
@@ -184,21 +190,24 @@ export default function App() {
           );
           const data = await res.json();
           if (!res.ok) {
-            if (cloudflareUrl) setCloudflareHealthy(false);
             if (!silent) {
               setLoadError(data.error || 'ไม่สามารถโหลดข้อมูลจากเซิร์ฟเวอร์ได้');
             }
             return;
           }
-          if (cloudflareUrl) {
-            setCloudflareHealthy(true);
-            setLiveConnected(true);
+          setLiveConnected(true);
+          if (typeof data.provider === 'string') {
+            setBackendProvider(data.provider);
           }
           const list = (data.accounts || []) as AccountSnapshot[];
-          const hadNoAccounts = accounts.length === 0;
           recordAccountRewards(list, initialPollDoneRef.current && silent);
           initialPollDoneRef.current = true;
-          setAccounts(list);
+          setAccounts((prev) => {
+            if (prev.length === 0 && list.length > 0 && silent) {
+              setActiveTab('overview');
+            }
+            return list;
+          });
           setSelectedAccountId((prev) => {
             if (prev && list.some((a) => a.accountId === prev)) return prev;
             return list[0]?.accountId ?? null;
@@ -206,24 +215,17 @@ export default function App() {
           if (list.length === 0 && !hasAutoSwitchedToSync.current && !silent) {
             hasAutoSwitchedToSync.current = true;
             setActiveTab('sync');
-          } else if (hadNoAccounts && list.length > 0 && silent) {
-            setActiveTab('overview');
           }
         }
       } catch {
-        if (cloudflareUrl) setCloudflareHealthy(false);
         if (!silent) {
-          setLoadError(
-            cloudflareUrl
-              ? 'ไม่สามารถเชื่อมต่อ Cloudflare Worker ได้ — ตรวจสอบ URL หรือสถานะ Worker'
-              : 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาลองใหม่อีกครั้ง'
-          );
+          setLoadError('ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาลองใหม่อีกครั้ง');
         }
       } finally {
         if (!silent) setLoading(false);
       }
     },
-    [shareId, activeApiBase, syncKey, cloudflareUrl, accounts.length, recordAccountRewards]
+    [shareId, activeApiBase, syncKey, recordAccountRewards]
   );
 
   useEffect(() => {
@@ -233,14 +235,12 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareId, syncKey, activeApiBase]);
 
-  const [backendProvider, setBackendProvider] = useState<string>('');
-  const [isServerlessBackend, setIsServerlessBackend] = useState<boolean>(false);
-
-  // Detect whether current /api backend is Vercel Serverless (uses polling) vs Express (uses SSE)
+  // Auto-detect backend capabilities (/api/health)
   useEffect(() => {
-    if (shareId || cloudflareUrl) {
-      setIsServerlessBackend(Boolean(cloudflareUrl));
-      setBackendProvider(cloudflareUrl ? 'cloudflare-worker' : '');
+    if (shareId) return;
+    if (cloudflareUrl) {
+      setIsServerlessBackend(true);
+      setBackendProvider('cloudflare-worker');
       return;
     }
     let cancelled = false;
@@ -253,18 +253,16 @@ export default function App() {
         setBackendProvider(typeof d?.provider === 'string' ? d.provider : 'express');
       })
       .catch(() => {
-        if (!cancelled) {
-          setIsServerlessBackend(true);
-        }
+        if (!cancelled) setIsServerlessBackend(true);
       });
     return () => {
       cancelled = true;
     };
   }, [shareId, cloudflareUrl]);
 
-  // Real-time live sync:
-  // - When connected to Cloudflare Worker + KV OR deployed on Vercel Serverless: poll every 3s while tab is visible
-  // - When running on local Express server: subscribe via SSE
+  // Automatic real-time updates:
+  // - On Vercel / Cloudflare: poll every 2.5 seconds automatically when tab is visible
+  // - On Express server: subscribe via SSE
   useEffect(() => {
     if (shareId) {
       setLiveConnected(false);
@@ -276,7 +274,7 @@ export default function App() {
         if (document.visibilityState === 'visible') {
           fetchAccounts(true);
         }
-      }, 3000);
+      }, 2500);
       return () => window.clearInterval(timer);
     }
 
@@ -352,38 +350,34 @@ export default function App() {
         if (!res.ok || !data.ok) {
           return {
             ok: false,
-            message: 'URL นี้ไม่ตอบกลับจาก AA Vault Cloudflare Worker (ตรวจสอบว่า Deploy worker.js แล้ว)',
+            message: 'URL นี้ไม่ตอบกลับจาก AA Vault Cloudflare Worker',
           };
         }
         if (!data.kvBound) {
           return {
             ok: true,
             kvBound: false,
-            message:
-              'เชื่อมต่อ Worker ได้แล้ว แต่ยังไม่ได้ผูก KV Namespace ชื่อ AA_VAULT_KV — ไปที่ Settings -> Bindings -> Add KV Namespace แล้วทดสอบอีกครั้ง',
+            message: 'เชื่อมต่อ Worker ได้แล้ว แต่ยังไม่ได้ผูก KV Namespace ชื่อ AA_VAULT_KV',
           };
         }
 
         localStorage.setItem(CF_STORAGE_KEY, normalized);
         setCloudflareUrl(normalized);
-        setCloudflareHealthy(true);
         setLiveConnected(true);
         pushSystemToast(
-          'เชื่อมต่อ Cloudflare KV สำเร็จ',
-          'คัดลอกสคริปต์ Lua เวอร์ชันที่อัปเดต URL แล้วไปรันในเกมได้เลย',
+          'เชื่อมต่อ Cloudflare Worker สำเร็จ',
+          'สคริปต์ Lua อัปเดต Endpoint ให้แล้ว',
           true
         );
         return {
           ok: true,
           kvBound: true,
-          message:
-            'เชื่อมต่อ Cloudflare Worker + KV สำเร็จแล้ว! สคริปต์ Lua ด้านล่างอัปเดต Endpoint ให้เรียบร้อย พร้อมรันรับข้อมูลสดจากในเกมได้ทันที',
+          message: 'เชื่อมต่อ Cloudflare Worker + KV สำเร็จแล้ว',
         };
       } catch {
         return {
           ok: false,
-          message:
-            'เชื่อมต่อไม่ได้ — ตรวจสอบว่า URL ถูกต้อง (เช่น https://aa-vault.xxx.workers.dev) และกด Deploy โค้ด worker.js แล้ว',
+          message: 'เชื่อมต่อไม่ได้ — ตรวจสอบ URL หรือสถานะ Deploy ของ Worker',
         };
       }
     },
@@ -393,12 +387,10 @@ export default function App() {
   const handleDisconnectCloudflare = useCallback(() => {
     localStorage.removeItem(CF_STORAGE_KEY);
     setCloudflareUrl('');
-    setCloudflareHealthy(null);
     setAccounts([]);
     setSelectedAccountId(null);
   }, []);
 
-  // Parse and submit real payload produced by 2K Lua script (works with both Cloudflare KV & local server)
   const submitScriptPacket = useCallback(
     async (
       rawText: string
@@ -415,20 +407,14 @@ export default function App() {
       }
 
       if (!parsed || typeof parsed !== 'object' || !parsed.username) {
-        return {
-          ok: false,
-          error: 'ไม่พบชื่อบัญชี Roblox ในข้อมูลที่วาง',
-        };
+        return { ok: false, error: 'ไม่พบชื่อบัญชี Roblox ในข้อมูลที่วาง' };
       }
 
       try {
         const res = await fetch(`${activeApiBase}/api/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...parsed,
-            syncKey,
-          }),
+          body: JSON.stringify({ ...parsed, syncKey }),
         });
         const data = await res.json();
         if (!res.ok || !data.ok) {
@@ -438,21 +424,19 @@ export default function App() {
         setSelectedAccountId(data.accountId);
         setActiveTab('overview');
         pushSystemToast(
-          `บันทึกข้อมูลจริงของ ${parsed.username} แล้ว`,
-          cloudflareUrl
-            ? 'เซฟลง Cloudflare KV เรียบร้อย'
-            : `ทีม ${parsed.equipped?.length ?? 0} ตัว · ไอเทม ${parsed.inventory?.length ?? 0} ชนิด`,
+          `อัปเดตข้อมูลจริงของ ${parsed.username} แล้ว`,
+          `ทีม ${parsed.equipped?.length ?? 0} ตัว · ไอเทม ${parsed.inventory?.length ?? 0} ชนิด`,
           true
         );
         return { ok: true, username: parsed.username };
       } catch {
-        return { ok: false, error: 'ไม่สามารถส่งข้อมูลเข้าปลายทางได้' };
+        return { ok: false, error: 'ไม่สามารถส่งข้อมูลเข้าเซิร์ฟเวอร์ได้' };
       }
     },
-    [activeApiBase, syncKey, cloudflareUrl, fetchAccounts, pushSystemToast]
+    [activeApiBase, syncKey, fetchAccounts, pushSystemToast]
   );
 
-  // Global Ctrl+V listener
+  // Global Ctrl+V backup listener
   useEffect(() => {
     if (shareId) return;
     const onWindowPaste = (e: ClipboardEvent) => {
@@ -511,37 +495,24 @@ export default function App() {
     await fetchAccounts(true);
   };
 
-  const handleQuickClipboardSync = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text.trim()) {
-        pushSystemToast(
-          'ยังไม่มีข้อมูลในคลิปบอร์ด',
-          'กดปุ่ม "คัดลอกข้อมูลเข้าเว็บ" ในหน้าต่างสคริปต์ในเกมก่อน',
-          false
-        );
-        return;
-      }
-      const res = await submitScriptPacket(text);
-      if (!res.ok) {
-        pushSystemToast('วางข้อมูลไม่สำเร็จ', res.error || 'รูปแบบข้อมูลไม่ถูกต้อง', false);
-      }
-    } catch {
-      setActiveTab('sync');
-      pushSystemToast(
-        'กรุณากด Ctrl+V เพื่อวางข้อมูล',
-        'เบราว์เซอร์บล็อกการอ่านคลิปบอร์ดอัตโนมัติ',
-        false
-      );
-    }
-  };
-
   const navItems: Array<{ id: NavTab; label: string; icon: typeof Users; hideInShare?: boolean }> = [
     { id: 'overview', label: 'ภาพรวม & ทีม 6 ตัว', icon: Users },
     { id: 'inventory', label: 'กระเป๋าไอเทม', icon: Backpack },
     { id: 'drops', label: 'ประวัติของที่ได้', icon: History },
-    { id: 'sync', label: 'Cloudflare & สคริปต์ Lua', icon: Cloud, hideInShare: true },
+    { id: 'sync', label: 'สคริปต์เชื่อมต่อเกม', icon: Code2, hideInShare: true },
   ];
+
+  const storageStatusLabel = cloudflareUrl
+    ? 'Cloudflare KV · ซิงค์สด'
+    : backendProvider === 'vercel-kv'
+      ? 'Vercel KV · ซิงค์อัตโนมัติ'
+      : backendProvider === 'cloudflare-kv-vercel'
+        ? 'Cloudflare KV · ซิงค์อัตโนมัติ'
+        : backendProvider === 'vercel-builtin'
+          ? 'ซิงค์อัตโนมัติ (Vercel)'
+          : liveConnected
+            ? 'ซิงค์อัตโนมัติ · พร้อมใช้งาน'
+            : 'กำลังเชื่อมต่อ';
 
   const renderSidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -595,15 +566,13 @@ export default function App() {
       <div className="px-3 pt-4 pb-3 flex-1 overflow-y-auto border-t border-white/[0.07]">
         <div className="px-3 pb-2 flex items-center justify-between">
           <span className="text-xs font-medium text-slate-500">
-            {shareId ? 'บัญชีที่แชร์' : `บัญชีที่ซิงค์แล้ว (${accounts.length})`}
+            {shareId ? 'บัญชีที่แชร์' : `บัญชีที่ออนไลน์ (${accounts.length})`}
           </span>
         </div>
 
         {accounts.length === 0 ? (
           <div className="px-3 py-4 text-xs text-slate-500 leading-relaxed">
-            {cloudflareUrl
-              ? 'กำลังรอรับข้อมูลสดจากสคริปต์ในเกมผ่าน Cloudflare KV...'
-              : 'เชื่อมต่อ Cloudflare KV หรือคัดลอกข้อมูลจากสคริปต์ในเกมเพื่อเริ่มต้น'}
+            กำลังรอข้อมูลจากสคริปต์ในเกม — รันสคริปต์แล้วบัญชีจะขึ้นมาอัตโนมัติ
           </div>
         ) : (
           <ul className="space-y-1">
@@ -651,8 +620,8 @@ export default function App() {
         )}
       </div>
 
-      {/* Sidebar Footer: Storage Provider & Sync Key */}
-      <div className="p-3 border-t border-white/[0.07] space-y-2 shrink-0">
+      {/* Sidebar Footer */}
+      <div className="p-3 border-t border-white/[0.07] shrink-0">
         {shareId ? (
           <button
             type="button"
@@ -662,37 +631,17 @@ export default function App() {
             เปิดแดชบอร์ดของฉัน
           </button>
         ) : (
-          <>
-            <button
-              type="button"
-              onClick={handleQuickClipboardSync}
-              className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-100 hover:bg-[#1E2538] transition-colors cursor-pointer"
-            >
-              <ClipboardPaste size={13} />
-              <span>วางข้อมูลจากสคริปต์</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('sync');
-                setMobileMenuOpen(false);
-              }}
-              className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors cursor-pointer"
-            >
-              <p className="text-[11px] text-slate-500 truncate">
-                {cloudflareUrl
-                  ? 'Cloudflare KV · ซิงค์สด'
-                  : backendProvider === 'cloudflare-kv-vercel'
-                    ? 'Vercel + Cloudflare KV'
-                    : backendProvider === 'vercel-ephemeral'
-                      ? 'Vercel API · แนะนำเชื่อม CF'
-                      : liveConnected
-                        ? 'Local Server · ยังไม่เชื่อม CF'
-                        : 'กำลังเชื่อมต่อ'}
-              </p>
-              <p className="mt-0.5 text-xs font-mono text-slate-200 truncate">{syncKey}</p>
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('sync');
+              setMobileMenuOpen(false);
+            }}
+            className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors cursor-pointer"
+          >
+            <p className="text-[11px] text-slate-500 truncate">{storageStatusLabel}</p>
+            <p className="mt-0.5 text-xs font-mono text-slate-200 truncate">ห้อง: {syncKey}</p>
+          </button>
         )}
       </div>
     </div>
@@ -767,8 +716,8 @@ export default function App() {
                 onClick={() => setActiveTab('sync')}
                 className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Cloud size={14} />
-                <span>ตั้งค่า Cloudflare</span>
+                <Code2 size={14} />
+                <span>คัดลอกสคริปต์ Lua</span>
               </button>
             )}
           </div>
@@ -801,18 +750,6 @@ export default function App() {
                 >
                   ลองใหม่อีกครั้ง
                 </button>
-                {!shareId && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoadError(null);
-                      setActiveTab('sync');
-                    }}
-                    className="px-4 py-2 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
-                  >
-                    ตั้งค่า Cloudflare
-                  </button>
-                )}
                 {shareId && (
                   <button
                     type="button"
@@ -828,7 +765,7 @@ export default function App() {
             <LuaSyncView
               syncKey={syncKey}
               cloudflareUrl={cloudflareUrl}
-              cloudflareHealthy={cloudflareHealthy}
+              backendProvider={backendProvider}
               accounts={accounts}
               liveConnected={liveConnected}
               onChangeSyncKey={handleChangeSyncKey}
@@ -843,23 +780,19 @@ export default function App() {
           ) : !activeAccount ? (
             <div className="rounded-xl bg-[#121620] border border-white/[0.08] p-12 text-center max-w-xl mx-auto mt-6">
               <h1 className="text-lg font-semibold text-slate-100">
-                {cloudflareUrl
-                  ? 'กำลังรอข้อมูลสดจากสคริปต์ในเกมผ่าน Cloudflare KV'
-                  : 'เชื่อมต่อ Cloudflare KV เพื่อรับข้อมูลสดจากในเกม'}
+                กำลังรอข้อมูลจากสคริปต์ในเกมอัตโนมัติ
               </h1>
               <p className="mt-2 text-sm text-slate-400 leading-relaxed">
-                {cloudflareUrl
-                  ? `คัดลอกสคริปต์ Lua ที่มีลิงก์ Cloudflare ของคุณไปรันในแมพ Anime Adventures แล้วข้อมูลทีม 6 ตัวและกระเป๋าจะเด้งขึ้นที่นี่อัตโนมัติ (ห้อง ${syncKey})`
-                  : 'ตั้งค่า Cloudflare Worker + KV ฟรี (1 นาที) เพื่อให้สคริปต์จาก Roblox ยิงข้อมูลเข้ามาเซฟอัตโนมัติได้ทันทีโดยไม่ติดล็อก Preview'}
+                คัดลอกสคริปต์ Lua ไปรันในแมพ Anime Adventures แล้วข้อมูลทีม 6 ตัว กระเป๋า และของที่ดรอปจะเด้งขึ้นมาเองทันทีโดยไม่ต้องกรอกลิงก์เพิ่ม
               </p>
-              <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <div className="mt-6 flex items-center justify-center">
                 <button
                   type="button"
                   onClick={() => setActiveTab('sync')}
                   className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors cursor-pointer"
                 >
-                  <Cloud size={14} />
-                  <span>{cloudflareUrl ? 'ดูสคริปต์ Lua' : 'ตั้งค่า Cloudflare & สคริปต์'}</span>
+                  <Code2 size={14} />
+                  <span>ไปคัดลอกสคริปต์ Lua</span>
                 </button>
               </div>
             </div>
