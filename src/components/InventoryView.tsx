@@ -116,16 +116,18 @@ export function InventoryView({
   const totalFilteredQty = filteredItems.reduce((s, i) => s + i.qty, 0);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Section Header */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-50">
-            กระเป๋าไอเทม
-          </h1>
-          <p className="mt-1 text-sm text-slate-400 tabular-nums">
-            แสดง {filteredItems.length} ชนิด · รวม {formatNumber(totalFilteredQty)} ชิ้น (จากทั้งหมด{' '}
-            {account.inventory.length} ชนิด)
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#10F5A0] shadow-[0_0_10px_#10F5A0]" />
+            <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
+              กระเป๋าไอเทม <span className="text-[#10F5A0]">({filteredItems.length})</span>
+            </h2>
+          </div>
+          <p className="mt-1 text-xs text-zinc-400 tabular-nums">
+            รวม {formatNumber(totalFilteredQty)} ชิ้น (จากทั้งหมด {account.inventory.length} ชนิด)
           </p>
         </div>
 
@@ -133,15 +135,15 @@ export function InventoryView({
           <button
             type="button"
             onClick={handleCopyTradeSummary}
-            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium rounded-lg bg-[#151A26] border border-white/[0.10] text-slate-200 hover:bg-[#1B2233] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium rounded-xl bg-[#0B0E11] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            {copiedSummary ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+            {copiedSummary ? <Check size={14} className="text-[#10F5A0]" /> : <Copy size={14} />}
             <span>{copiedSummary ? 'คัดลอกสรุปแล้ว' : 'คัดลอกสรุปเทรด'}</span>
           </button>
           <button
             type="button"
             onClick={handleExportCsv}
-            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium rounded-lg bg-[#151A26] border border-white/[0.10] text-slate-200 hover:bg-[#1B2233] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium rounded-xl bg-[#0B0E11] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Download size={14} />
             <span>ส่งออก CSV</span>
@@ -151,19 +153,19 @@ export function InventoryView({
 
       {/* Filter & Search Toolbar */}
       <div className="space-y-3">
-        <div className="flex flex-col md:flex-row gap-3">
+        <div className="flex flex-col md:flex-row gap-2.5">
           {/* Search Input */}
           <div className="relative flex-1">
             <Search
               size={15}
-              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"
+              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none"
             />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="ค้นหาชื่อไอเทม, Item ID หรือหมวดหมู่..."
-              className="w-full pl-10 pr-4 py-2 text-sm rounded-lg bg-[#121620] border border-white/[0.09] text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-[#4F6EF7]"
+              className="w-full pl-10 pr-4 py-2.5 text-sm rounded-2xl bg-[#0B0E11] border border-white/[0.09] text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-[#10F5A0]/60"
             />
           </div>
 
@@ -172,7 +174,7 @@ export function InventoryView({
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as SortBy)}
             aria-label="เรียงลำดับไอเทม"
-            className="px-3.5 py-2 text-sm rounded-lg bg-[#121620] border border-white/[0.09] text-slate-200 focus:outline-none focus:border-[#4F6EF7] cursor-pointer"
+            className="px-3.5 py-2.5 text-sm rounded-2xl bg-[#0B0E11] border border-white/[0.09] text-zinc-200 focus:outline-none focus:border-[#10F5A0]/60 cursor-pointer"
           >
             <option value="rarity">เรียงตามความหายาก</option>
             <option value="qty">เรียงตามจำนวนมากสุด</option>
@@ -180,14 +182,14 @@ export function InventoryView({
           </select>
 
           {/* View Mode Segmented Control */}
-          <div className="inline-flex items-center p-1 rounded-lg bg-[#121620] border border-white/[0.08] shrink-0 self-start md:self-auto">
+          <div className="inline-flex items-center p-1 rounded-2xl bg-[#0B0E11] border border-white/[0.08] shrink-0 self-start md:self-auto">
             <button
               type="button"
               onClick={() => setViewMode('table')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-xl transition-colors whitespace-nowrap cursor-pointer ${
                 viewMode === 'table'
-                  ? 'bg-[#20273A] text-white'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-[#191F24] text-white border border-white/[0.08]'
+                  : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
               <List size={14} />
@@ -196,10 +198,10 @@ export function InventoryView({
             <button
               type="button"
               onClick={() => setViewMode('grouped')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-xl transition-colors whitespace-nowrap cursor-pointer ${
                 viewMode === 'grouped'
-                  ? 'bg-[#20273A] text-white'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-[#191F24] text-white border border-white/[0.08]'
+                  : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
               <LayoutGrid size={14} />
@@ -213,10 +215,10 @@ export function InventoryView({
           <button
             type="button"
             onClick={() => onGroupChange('ALL')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               initialGroup === 'ALL'
-                ? 'bg-[#4F6EF7] text-white'
-                : 'bg-[#121620] text-slate-400 border border-white/[0.07] hover:text-slate-200'
+                ? 'bg-[#10F5A0] text-[#04150E]'
+                : 'bg-[#0B0E11] text-zinc-400 border border-white/[0.08] hover:text-zinc-200'
             }`}
           >
             ทุกหมวดหมู่ ({account.inventory.length})
@@ -226,10 +228,10 @@ export function InventoryView({
               key={g.name}
               type="button"
               onClick={() => onGroupChange(g.name)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 initialGroup === g.name
-                  ? 'bg-[#4F6EF7] text-white'
-                  : 'bg-[#121620] text-slate-400 border border-white/[0.07] hover:text-slate-200'
+                  ? 'bg-[#10F5A0] text-[#04150E]'
+                  : 'bg-[#0B0E11] text-zinc-400 border border-white/[0.08] hover:text-zinc-200'
               }`}
             >
               {g.name} ({formatNumber(g.total)})
@@ -242,10 +244,10 @@ export function InventoryView({
           <button
             type="button"
             onClick={() => setSelectedRarity('ALL')}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`px-3 py-1 text-xs font-medium rounded-full transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               selectedRarity === 'ALL'
                 ? 'bg-white/[0.12] text-white'
-                : 'text-slate-500 hover:text-slate-300'
+                : 'text-zinc-500 hover:text-zinc-300'
             }`}
           >
             ทุกระดับ
@@ -258,10 +260,10 @@ export function InventoryView({
                 key={r}
                 type="button"
                 onClick={() => setSelectedRarity(active ? 'ALL' : r)}
-                className="px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="px-3 py-1 text-xs font-medium rounded-full transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 style={{
                   backgroundColor: active ? meta.softBg : 'transparent',
-                  color: active ? meta.text : '#94A3B8',
+                  color: active ? meta.text : '#9CA3AF',
                   border: active ? `1px solid ${meta.border}` : '1px solid transparent',
                 }}
               >
@@ -274,11 +276,11 @@ export function InventoryView({
 
       {/* Empty State */}
       {filteredItems.length === 0 ? (
-        <div className="rounded-xl bg-[#121620] border border-white/[0.08] p-12 text-center">
-          <p className="text-sm font-medium text-slate-200">
+        <div className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] p-12 text-center">
+          <p className="font-display text-base font-bold text-white">
             ไม่พบไอเทมที่ตรงกับเงื่อนไขการค้นหา
           </p>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-zinc-400">
             ลองล้างคำค้นหาหรือเปลี่ยนตัวกรองหมวดหมู่และระดับความหายาก
           </p>
           <button
@@ -288,23 +290,23 @@ export function InventoryView({
               onGroupChange('ALL');
               setSelectedRarity('ALL');
             }}
-            className="mt-4 px-4 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors cursor-pointer"
+            className="mt-5 px-6 py-2.5 text-xs font-bold rounded-full bg-[#10F5A0] text-[#04150E] hover:bg-[#28FFA9] transition-colors cursor-pointer"
           >
             รีเซ็ตตัวกรอง
           </button>
         </div>
       ) : viewMode === 'table' ? (
         /* Compact High-Density Data Table */
-        <div className="rounded-xl bg-[#121620] border border-white/[0.08] overflow-hidden">
+        <div className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-white/[0.08] text-xs font-medium text-slate-400">
-                  <th className="py-3 pl-5 pr-3">ไอเทม</th>
-                  <th className="py-3 px-3">หมวดหมู่</th>
-                  <th className="py-3 px-3">ความหายาก</th>
-                  <th className="py-3 px-3">ประเภท</th>
-                  <th className="py-3 pl-3 pr-5 text-right">จำนวน</th>
+                <tr className="border-b border-white/[0.08] text-xs font-medium text-zinc-400">
+                  <th className="py-3.5 pl-5 pr-3">ไอเทม</th>
+                  <th className="py-3.5 px-3">หมวดหมู่</th>
+                  <th className="py-3.5 px-3">ความหายาก</th>
+                  <th className="py-3.5 px-3">ประเภท</th>
+                  <th className="py-3.5 pl-3 pr-5 text-right">จำนวน</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.06] text-sm">
@@ -315,7 +317,7 @@ export function InventoryView({
                       key={`${it.kind}-${it.id}`}
                       className="hover:bg-white/[0.025] transition-colors"
                     >
-                      <td className="py-2.5 pl-5 pr-3">
+                      <td className="py-3 pl-5 pr-3">
                         <div className="flex items-center gap-3 min-w-[200px]">
                           <ItemEmblem
                             kind="item"
@@ -331,25 +333,25 @@ export function InventoryView({
                             >
                               {it.name}
                             </p>
-                            <p className="text-[11px] font-mono text-slate-500 truncate">
+                            <p className="text-[11px] font-mono text-zinc-500 truncate">
                               {it.id}
                             </p>
                           </div>
                         </div>
                       </td>
-                      <td className="py-2.5 px-3 text-xs text-slate-300 whitespace-nowrap">
+                      <td className="py-3 px-3 text-xs text-zinc-300 whitespace-nowrap">
                         {it.group}
                       </td>
                       <td
-                        className="py-2.5 px-3 text-xs font-medium whitespace-nowrap"
+                        className="py-3 px-3 text-xs font-medium whitespace-nowrap"
                         style={{ color: meta.text }}
                       >
                         {it.rarity}
                       </td>
-                      <td className="py-2.5 px-3 text-xs text-slate-400 whitespace-nowrap">
+                      <td className="py-3 px-3 text-xs text-zinc-400 whitespace-nowrap">
                         {it.kind === 'unique' ? 'Unique' : 'Normal'}
                       </td>
-                      <td className="py-2.5 pl-3 pr-5 text-right font-mono tabular-nums font-semibold text-slate-100 whitespace-nowrap">
+                      <td className="py-3 pl-3 pr-5 text-right font-mono tabular-nums font-semibold text-white whitespace-nowrap">
                         x{formatNumber(it.qty)}
                       </td>
                     </tr>
@@ -360,17 +362,17 @@ export function InventoryView({
           </div>
         </div>
       ) : (
-        /* Grouped by item_group View (matching Lua script bag layout) */
+        /* Grouped by item_group View */
         <div className="space-y-6">
           {groupedItems.map(([groupName, items]) => {
             const sumQty = items.reduce((s, i) => s + i.qty, 0);
             return (
               <section key={groupName} className="space-y-3">
                 <div className="flex items-baseline justify-between border-b border-white/[0.07] pb-2">
-                  <h2 className="text-sm font-semibold text-slate-200">
+                  <h3 className="font-display text-sm font-bold text-white">
                     {groupName}
-                  </h2>
-                  <span className="text-xs font-mono tabular-nums text-slate-500">
+                  </h3>
+                  <span className="text-xs font-mono tabular-nums text-zinc-500">
                     {items.length} ชนิด · {formatNumber(sumQty)} ชิ้น
                   </span>
                 </div>
@@ -380,7 +382,7 @@ export function InventoryView({
                     return (
                       <div
                         key={`${it.kind}-${it.id}`}
-                        className="flex items-center justify-between gap-3 p-3 rounded-lg bg-[#121620] border border-white/[0.08]"
+                        className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-[#0B0E11] border border-white/[0.08]"
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <ItemEmblem
@@ -397,12 +399,12 @@ export function InventoryView({
                             >
                               {it.name}
                             </p>
-                            <p className="text-xs text-slate-500 truncate">
+                            <p className="text-xs text-zinc-500 truncate">
                               {it.rarity} · {it.kind === 'unique' ? 'Unique' : 'Normal'}
                             </p>
                           </div>
                         </div>
-                        <span className="font-mono tabular-nums text-sm font-semibold text-slate-100 shrink-0">
+                        <span className="font-mono tabular-nums text-sm font-semibold text-[#10F5A0] shrink-0">
                           x{formatNumber(it.qty)}
                         </span>
                       </div>

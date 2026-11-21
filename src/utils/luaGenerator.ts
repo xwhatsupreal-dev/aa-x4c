@@ -185,7 +185,7 @@ local function mkAct(label, w, cb)
 	b.MouseButton1Click:Connect(cb)
 	return b
 end
-mkAct("สแกนใหม่", 118, function() Hub.Profile = nil; Hub.IconLookups = 0; Hub.Refresh(true) end)
+mkAct("สแกนใหม่", 118, function() Hub.Profile = nil; Hub.IconLookups = 0; if Hub.ResetInvBaseline then Hub.ResetInvBaseline() end; Hub.Refresh(true) end)
 local notifyBtn
 notifyBtn = mkAct("แจ้งเตือน: เปิด", 136, function()
 	Hub.Flags.Notify = not Hub.Flags.Notify
@@ -819,28 +819,69 @@ hookEvent("game_finished", function()
 	Hub.SyncToWeb(false)
 end)
 
-local lastUuids, lastNormal = nil, nil
-local function diffInventory()
+local lastUuids, lastNormal, invReadyAt = nil, nil, 0
+function Hub.ResetInvBaseline()
+	lastUuids = nil
+	lastNormal = nil
+	invReadyAt = 0
+end
+
+local function diffInventory(baselineOnly)
+	local pd = findProfile()
+	if not pd or type(pd.inventory) ~= "table" then return end
 	local normal, unique = getInventory()
 	local uset = {}
+	local entryCount = 0
 	for _, v in pairs(unique) do
-		if type(v) == "table" and v.uuid then uset[tostring(v.uuid)] = tostring(v.item_id) end
+		if type(v) == "table" and v.uuid then
+			uset[tostring(v.uuid)] = tostring(v.item_id)
+			entryCount = entryCount + 1
+		end
 	end
 	local nset = {}
-	for k, v in pairs(normal) do nset[tostring(k)] = tonumber(v) or 0 end
+	for k, v in pairs(normal) do
+		local q = tonumber(v) or 0
+		nset[tostring(k)] = q
+		if q > 0 then entryCount = entryCount + 1 end
+	end
 
-	if lastUuids then
-		local count = {}
-		for u, id in pairs(uset) do
-			if not lastUuids[u] then count[id] = (count[id] or 0) + 1 end
+	-- รอจนกว่ากระเป๋าจะโหลดเสร็จจริง และเก็บเป็นฐานเริ่มต้นโดยไม่ส่งเข้า "ของดรอป"
+	if not lastUuids then
+		if entryCount > 0 then
+			lastUuids, lastNormal = uset, nset
+			invReadyAt = os.clock()
 		end
-		for id, q in pairs(count) do addReward("item", id, q, "inventory") end
-		for id, q in pairs(nset) do
-			local old = lastNormal[id] or 0
-			if q > old then addReward("item", id, q - old, "inventory") end
+		return
+	end
+
+	-- ช่วงอุ่นเครื่อง 5 วินาทีแรกหลังโหลดกระเป๋า ให้อัปเดตฐานเฉยๆ ไม่นับเป็นของดรอป
+	if baselineOnly or (os.clock() - invReadyAt) < 5 then
+		lastUuids, lastNormal = uset, nset
+		return
+	end
+
+	local pending = {}
+	local uCount = {}
+	for u, id in pairs(uset) do
+		if not lastUuids[u] then uCount[id] = (uCount[id] or 0) + 1 end
+	end
+	for id, q in pairs(uCount) do
+		pending[#pending + 1] = { id = id, qty = q }
+	end
+	for id, q in pairs(nset) do
+		local old = lastNormal[id] or 0
+		if q > old then
+			pending[#pending + 1] = { id = id, qty = q - old }
 		end
 	end
+
 	lastUuids, lastNormal = uset, nset
+
+	-- กันกรณีรีโหลดโปรไฟล์ทั้งกระเป๋าพร้อมกัน (โผล่ทีเดียวเกิน 12 ชนิด)
+	if #pending > 12 then return end
+	for _, d in ipairs(pending) do
+		addReward("item", d.id, d.qty, "inventory")
+	end
 end
 
 ------------------------------------------------------------------
@@ -915,8 +956,7 @@ function Hub.Refresh(forceRender)
 end
 
 task.spawn(function()
-	pcall(diffInventory)
-	pcall(diffInventory)
+	pcall(diffInventory, true)
 	Hub.SyncToWeb(true)
 	while Hub.Running do
 		pcall(Hub.Refresh)

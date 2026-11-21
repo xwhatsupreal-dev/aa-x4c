@@ -88,30 +88,33 @@ export function ShareModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="share-modal-title"
     >
-      <div className="w-full max-w-lg rounded-xl bg-[#121620] border border-white/[0.12] overflow-hidden">
+      <div className="w-full max-w-lg rounded-3xl bg-[#0B0E11] border border-white/[0.10] overflow-hidden shadow-[0_24px_80px_rgba(0,0,0,0.8)]">
         <div className="px-5 py-4 border-b border-white/[0.08] flex items-center justify-between">
-          <h2 id="share-modal-title" className="text-base font-semibold text-slate-100">
-            แชร์ลิ้งค์เช็คของ (Read-Only)
-          </h2>
+          <div className="flex items-center gap-2.5">
+            <span className="w-2 h-2 rounded-full bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]" />
+            <h2 id="share-modal-title" className="font-display text-base font-bold text-white">
+              แชร์ลิ้งค์เช็คของ (Read-Only)
+            </h2>
+          </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="ปิดหน้าต่าง"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer"
+            className="p-1.5 rounded-xl bg-[#12161B] border border-white/[0.08] text-zinc-400 hover:text-white transition-colors cursor-pointer"
           >
             <X size={16} />
           </button>
         </div>
 
         <div className="p-5 space-y-4">
-          <p className="text-sm text-slate-400 leading-relaxed">
+          <p className="text-sm text-zinc-400 leading-relaxed">
             สร้างลิ้งค์สำหรับส่งให้เพื่อนหรือผู้ซื้อดูทีม 6 ตัว, Gold/Gems และกระเป๋าไอเทมของ{' '}
-            <span className="text-slate-100 font-medium">{account.displayName}</span>{' '}
+            <span className="text-white font-semibold">{account.displayName}</span>{' '}
             {cloudflareUrl
               ? '(บันทึกลง Cloudflare KV ถาวรโดยไม่เปิดเผย Sync Key)'
               : '(โหมดดูอย่างเดียวโดยไม่เปิดเผย Sync Key)'}
@@ -124,7 +127,7 @@ export function ShareModal({
                 type="button"
                 onClick={handleCreateShare}
                 disabled={creating}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] disabled:opacity-50 transition-colors cursor-pointer"
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 text-sm font-bold rounded-full bg-[#10F5A0] text-[#04150E] hover:bg-[#28FFA9] shadow-[0_0_24px_rgba(16,245,160,0.28)] disabled:opacity-50 transition-all cursor-pointer"
               >
                 <Link2 size={15} />
                 <span>{creating ? 'กำลังสร้างลิ้งค์เช็คของ...' : 'สร้างลิ้งค์เช็คของตอนนี้'}</span>
@@ -137,12 +140,12 @@ export function ShareModal({
                   type="text"
                   readOnly
                   value={shareUrl}
-                  className="flex-1 px-3 py-2 text-xs font-mono rounded-lg bg-[#0B0E14] border border-white/[0.10] text-slate-200 focus:outline-none"
+                  className="flex-1 px-3.5 py-2.5 text-xs font-mono rounded-xl bg-[#050709] border border-white/[0.10] text-zinc-200 focus:outline-none"
                 />
                 <button
                   type="button"
                   onClick={handleCopyUrl}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold rounded-xl bg-[#10F5A0] text-[#04150E] hover:bg-[#28FFA9] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   {copiedUrl ? <Check size={14} /> : <Copy size={14} />}
                   <span>{copiedUrl ? 'คัดลอกแล้ว' : 'คัดลอกลิ้งค์'}</span>
@@ -152,9 +155,9 @@ export function ShareModal({
               <button
                 type="button"
                 onClick={handleCopyTextCard}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-medium rounded-xl bg-[#12161B] border border-white/[0.09] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white transition-colors cursor-pointer"
               >
-                {copiedText ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                {copiedText ? <Check size={14} className="text-[#10F5A0]" /> : <Copy size={14} />}
                 <span>
                   {copiedText
                     ? 'คัดลอกข้อความพร้อมลิ้งค์แล้ว'

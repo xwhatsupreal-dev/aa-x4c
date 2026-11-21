@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Backpack,
+  ArrowRight,
   Code2,
+  Flame,
   History,
-  Menu,
+  LayoutGrid,
+  RefreshCw,
   Share2,
+  Sparkles,
   Trash2,
-  Users,
-  X,
 } from 'lucide-react';
 import {
   formatCompact,
@@ -34,13 +35,6 @@ interface ToastNotification {
 
 const STORAGE_KEY = 'aa_vault_sync_key_v2';
 const CF_STORAGE_KEY = 'aa_vault_cf_worker_url';
-
-const TAB_TITLES: Record<NavTab, string> = {
-  overview: 'ภาพรวม & ทีม 6 ตัว',
-  inventory: 'กระเป๋าไอเทม',
-  drops: 'ประวัติของที่ได้',
-  sync: 'สคริปต์เชื่อมต่อเกม',
-};
 
 function getInitialSyncKey(): string {
   if (typeof window === 'undefined') return 'main';
@@ -90,8 +84,8 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<NavTab>('overview');
   const [inventoryGroup, setInventoryGroup] = useState<string>('ALL');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
   const [liveConnected, setLiveConnected] = useState(false);
   const [backendProvider, setBackendProvider] = useState<string>('');
@@ -506,132 +500,240 @@ export default function App() {
     await fetchAccounts(true);
   };
 
-  const navItems: Array<{ id: NavTab; label: string; icon: typeof Users; hideInShare?: boolean }> = [
-    { id: 'overview', label: 'ภาพรวม & ทีม 6 ตัว', icon: Users },
-    { id: 'inventory', label: 'กระเป๋าไอเทม', icon: Backpack },
-    { id: 'drops', label: 'ประวัติของที่ได้', icon: History },
-    { id: 'sync', label: 'สคริปต์เชื่อมต่อเกม', icon: Code2, hideInShare: true },
+  const navItems: Array<{ id: NavTab; label: string; icon: typeof Flame; hideInShare?: boolean }> = [
+    { id: 'overview', label: 'ทีม 6 ตัว', icon: Flame },
+    { id: 'inventory', label: 'กระเป๋า', icon: LayoutGrid },
+    { id: 'drops', label: 'ของดรอป', icon: History },
+    { id: 'sync', label: 'สคริปต์', icon: Code2, hideInShare: true },
   ];
 
-  const storageStatusLabel = cloudflareUrl
-    ? 'Cloudflare KV · ซิงค์สด'
+  const visibleNavItems = navItems.filter((item) => !(shareId && item.hideInShare));
+  const onlineCount = accounts.filter((a) => isAccountOnline(a.lastSyncedAt, nowTs)).length;
+
+  const storageShortLabel = cloudflareUrl
+    ? 'Cloudflare KV'
     : backendProvider === 'vercel-kv'
-      ? 'Vercel KV · ซิงค์อัตโนมัติ'
+      ? 'Upstash Redis'
       : backendProvider === 'cloudflare-kv-vercel'
-        ? 'Cloudflare KV · ซิงค์อัตโนมัติ'
+        ? 'Cloudflare KV'
         : backendProvider === 'vercel-builtin'
-          ? 'ซิงค์อัตโนมัติ (Vercel)'
+          ? 'Vercel API'
           : liveConnected
-            ? 'ซิงค์อัตโนมัติ · พร้อมใช้งาน'
-            : 'กำลังเชื่อมต่อ';
+            ? 'Live Server'
+            : 'Auto Sync';
 
-  const renderSidebarContent = () => (
-    <div className="flex flex-col h-full">
-      {/* Brand Title */}
-      <div className="h-14 px-5 flex items-center justify-between border-b border-white/[0.07] shrink-0">
-        <span className="text-base font-bold tracking-tight text-slate-50 whitespace-nowrap">
-          AA Vault
-        </span>
-        <button
-          type="button"
-          onClick={() => setMobileMenuOpen(false)}
-          aria-label="ปิดเมนู"
-          className="lg:hidden p-1.5 rounded-md text-slate-400 hover:text-white cursor-pointer"
-        >
-          <X size={18} />
-        </button>
-      </div>
+  const handleManualRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await fetchAccounts(true);
+    } finally {
+      setTimeout(() => setRefreshing(false), 400);
+    }
+  };
 
-      {/* Primary Navigation */}
-      <nav aria-label="เมนูหลัก" className="p-3 space-y-1">
-        {navItems
-          .filter((item) => !(shareId && item.hideInShare))
-          .map((item) => {
-            const Icon = item.icon;
-            const active = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  setActiveTab(item.id);
-                  setMobileMenuOpen(false);
-                }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                  active
-                    ? 'bg-[#4F6EF7]/15 text-white'
-                    : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-                }`}
-              >
-                <Icon
-                  size={16}
-                  className={active ? 'text-[#7D96FF] shrink-0' : 'text-slate-500 shrink-0'}
-                />
-                <span className="truncate">{item.label}</span>
-              </button>
-            );
-          })}
-      </nav>
-
-      {/* Synced Accounts Switcher */}
-      <div className="px-3 pt-4 pb-3 flex-1 overflow-y-auto border-t border-white/[0.07]">
-        <div className="px-3 pb-2 flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-slate-500">
-            {shareId ? 'บัญชีที่แชร์' : `บัญชีที่บันทึกไว้ (${accounts.length})`}
-          </span>
-          {!shareId && accounts.length > 0 && (
-            <span className="text-[11px] font-mono tabular-nums text-emerald-400/90">
-              ออนไลน์ {accounts.filter((a) => isAccountOnline(a.lastSyncedAt, nowTs)).length}
+  return (
+    <div className="min-h-screen text-zinc-100 pb-28">
+      {/* Floating Rounded Top Header (matching uniqueclub-opm.vercel.app) */}
+      <header className="sticky top-0 z-30 pt-3 sm:pt-4 px-3 sm:px-6">
+        <div className="max-w-5xl mx-auto rounded-2xl bg-[#0B0E11]/90 backdrop-blur-xl border border-white/[0.09] px-3.5 sm:px-4 h-14 sm:h-16 flex items-center justify-between gap-3 shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+          {/* Brand Logo */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('overview')}
+            className="flex items-center gap-2.5 min-w-0 cursor-pointer"
+          >
+            <svg
+              viewBox="0 0 36 36"
+              fill="none"
+              className="w-8 h-8 shrink-0"
+              aria-hidden="true"
+            >
+              <defs>
+                <linearGradient id="aaCrownGrad" x1="4" y1="6" x2="32" y2="30" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#FF2E63" />
+                  <stop offset="55%" stopColor="#FF5E3A" />
+                  <stop offset="100%" stopColor="#FFB800" />
+                </linearGradient>
+              </defs>
+              <path
+                d="M5 12.5L11.5 18.5L18 9L24.5 18.5L31 12.5L28.5 26.5C28.3 27.6 27.3 28.5 26.1 28.5H9.9C8.7 28.5 7.7 27.6 7.5 26.5L5 12.5Z"
+                fill="url(#aaCrownGrad)"
+              />
+              <circle cx="5.5" cy="11" r="2" fill="#FF2E63" />
+              <circle cx="18" cy="7.5" r="2.2" fill="#FF6B35" />
+              <circle cx="30.5" cy="11" r="2" fill="#FF9E1B" />
+            </svg>
+            <span className="font-display text-lg sm:text-xl font-extrabold tracking-tight leading-none whitespace-nowrap">
+              <span className="text-white">AA </span>
+              <span className="text-[#10F5A0]">VAULT</span>
             </span>
-          )}
-        </div>
+          </button>
 
-        {accounts.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-slate-500 leading-relaxed">
-            กำลังรอข้อมูลจากสคริปต์ในเกม — รันสคริปต์แล้วบัญชีจะขึ้นมาและบันทึกค้างไว้ให้อัตโนมัติ
-          </div>
-        ) : (
-          <ul className="space-y-1">
-            {accounts.map((acc) => {
-              const selected = activeAccount?.accountId === acc.accountId;
-              const online = isAccountOnline(acc.lastSyncedAt, nowTs);
-              return (
-                <li key={acc.accountId} className="group relative">
+          {/* Right Compact Icon/Action Controls */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleManualRefresh}
+              title="รีเฟรชข้อมูลล่าสุด"
+              aria-label="รีเฟรชข้อมูลล่าสุด"
+              className="w-10 h-10 rounded-xl bg-[#10F5A0]/10 border border-[#10F5A0]/40 text-[#10F5A0] hover:bg-[#10F5A0]/20 flex items-center justify-center transition-colors cursor-pointer"
+            >
+              <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
+            </button>
+
+            {shareId ? (
+              <button
+                type="button"
+                onClick={handleExitShareMode}
+                className="h-10 px-3.5 rounded-xl bg-[#12161B] border border-white/[0.10] text-xs font-semibold text-white hover:border-[#10F5A0]/40 transition-colors whitespace-nowrap cursor-pointer"
+              >
+                แดชบอร์ดหลัก
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('sync')}
+                  className="h-10 px-3 rounded-xl bg-[#12161B] border border-white/[0.10] text-xs font-mono text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#10F5A0]" />
+                  <span>{syncKey}</span>
+                </button>
+
+                {activeAccount ? (
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedAccountId(acc.accountId);
-                      if (activeTab === 'sync') setActiveTab('overview');
-                      setMobileMenuOpen(false);
-                    }}
-                    className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors cursor-pointer ${
+                    onClick={() => setShareModalOpen(true)}
+                    title="แชร์ลิ้งค์เช็คของ"
+                    aria-label="แชร์ลิ้งค์เช็คของ"
+                    className="w-10 h-10 sm:w-auto sm:px-3.5 rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-[#10F5A0] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Share2 size={15} />
+                    <span className="hidden sm:inline text-xs font-semibold">แชร์ลิงก์</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('sync')}
+                    title="สคริปต์ 1 บรรทัด"
+                    aria-label="สคริปต์ 1 บรรทัด"
+                    className="w-10 h-10 rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-300 hover:border-[#10F5A0]/40 hover:text-[#10F5A0] flex items-center justify-center transition-colors cursor-pointer"
+                  >
+                    <Code2 size={16} />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* Main Centered Container */}
+      <main className="max-w-5xl mx-auto px-3.5 sm:px-6">
+        {/* Centered Hero Section (matching uniqueclub-opm.vercel.app) */}
+        <section className="pt-8 pb-7 sm:pt-11 sm:pb-9 text-center">
+          <div className="inline-flex items-center gap-2 text-[11px] sm:text-xs font-mono font-semibold tracking-wider text-[#10F5A0] uppercase">
+            <Sparkles size={14} className="shrink-0" />
+            <span>
+              {shareId
+                ? '// SHARED INVENTORY SNAPSHOT · READ ONLY'
+                : '// LIVE INVENTORY HUB · ANIME ADVENTURES'}
+            </span>
+          </div>
+
+          <h1 className="mt-3 font-display text-3xl sm:text-5xl font-extrabold tracking-tight leading-tight text-balance">
+            <span className="text-white">เช็คของ </span>
+            <span className="text-[#10F5A0]">Anime Adventures</span>
+          </h1>
+
+          <p className="mt-3 text-xs sm:text-sm text-zinc-400 max-w-lg mx-auto leading-relaxed">
+            เช็คทีม 6 ตัว กระเป๋าไอเทม และของดรอปแบบเรียลไทม์ ซิงค์ตรงจากสคริปต์ในเกม
+            บันทึกค้างไว้ดูได้ตลอดแม้ออฟไลน์
+          </p>
+
+          {/* 3 Rounded Status Capsules (stacked on mobile, inline on desktop) */}
+          <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-2.5">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
+              <span className="w-2 h-2 rounded-full bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]" />
+              <span className="text-zinc-400">ออนไลน์ตอนนี้:</span>
+              <span className="font-mono font-bold tabular-nums text-[#10F5A0]">
+                {onlineCount}
+              </span>
+              <span className="font-semibold text-[#10F5A0]">บัญชี</span>
+            </div>
+
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
+              <span className="text-zinc-400">บันทึกไว้ทั้งหมด:</span>
+              <span className="font-mono font-bold tabular-nums text-white">
+                {accounts.length}
+              </span>
+              <span className="font-semibold text-white">บัญชี</span>
+            </div>
+
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
+              <span className="text-zinc-400">ระบบจัดเก็บ:</span>
+              <span className="font-semibold text-white">{storageShortLabel}</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Horizontal Saved Account Selector Strip (when accounts exist) */}
+        {!shareId && accounts.length > 0 && (
+          <section aria-label="เลือกบัญชีที่บันทึกไว้" className="mb-6">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#10F5A0] shadow-[0_0_10px_#10F5A0]" />
+                <h2 className="font-display text-base sm:text-lg font-bold text-white">
+                  บัญชีที่บันทึกไว้ <span className="text-[#10F5A0]">({accounts.length})</span>
+                </h2>
+              </div>
+              <span className="text-xs text-zinc-500">แตะเพื่อสลับดูของ</span>
+            </div>
+
+            <div className="flex items-stretch gap-2.5 overflow-x-auto pb-2">
+              {accounts.map((acc) => {
+                const selected = activeAccount?.accountId === acc.accountId && activeTab !== 'sync';
+                const online = isAccountOnline(acc.lastSyncedAt, nowTs);
+                return (
+                  <div
+                    key={acc.accountId}
+                    className={`group relative shrink-0 min-w-[205px] max-w-[240px] rounded-2xl border transition-all ${
                       selected
-                        ? 'bg-[#171C2B] text-slate-100'
-                        : 'text-slate-400 hover:bg-white/[0.035] hover:text-slate-200'
+                        ? 'bg-[#101816] border-[#10F5A0]/50 shadow-[0_0_20px_rgba(16,245,160,0.10)]'
+                        : 'bg-[#0B0E11] border-white/[0.08] hover:border-white/[0.16]'
                     }`}
                   >
-                    <div className="flex items-center gap-2 pr-6 min-w-0">
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                          online ? 'bg-emerald-400' : 'bg-slate-600'
-                        }`}
-                        title={online ? 'กำลังออนไลน์' : 'ออฟไลน์'}
-                      />
-                      <p className="text-sm font-medium truncate">{acc.displayName}</p>
-                    </div>
-                    <p className="mt-0.5 pl-3.5 text-[11px] font-mono tabular-nums text-slate-500 truncate">
-                      {formatCompact(acc.gems)} Gems · {formatCompact(acc.gold)} Gold
-                    </p>
-                    <p
-                      className={`mt-0.5 pl-3.5 text-[11px] truncate ${
-                        online ? 'text-emerald-400/85' : 'text-slate-500'
-                      }`}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedAccountId(acc.accountId);
+                        if (activeTab === 'sync') setActiveTab('overview');
+                      }}
+                      className="w-full text-left px-3.5 py-3 pr-9 cursor-pointer"
                     >
-                      {online ? 'ออนไลน์' : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
-                    </p>
-                  </button>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className={`w-2 h-2 rounded-full shrink-0 ${
+                            online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-600'
+                          }`}
+                        />
+                        <p className="text-sm font-semibold text-white truncate">
+                          {acc.displayName}
+                        </p>
+                      </div>
+                      <p className="mt-1 text-[11px] font-mono tabular-nums text-zinc-400 truncate">
+                        {formatCompact(acc.gems)} Gems · {formatCompact(acc.gold)} Gold
+                      </p>
+                      <p
+                        className={`mt-0.5 text-[11px] truncate ${
+                          online ? 'text-[#10F5A0]' : 'text-zinc-500'
+                        }`}
+                      >
+                        {online ? 'ออนไลน์' : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
+                      </p>
+                    </button>
 
-                  {!shareId && (
                     <button
                       type="button"
                       onClick={(e) => {
@@ -640,236 +742,178 @@ export default function App() {
                       }}
                       title={`ลบบัญชี ${acc.username}`}
                       aria-label={`ลบบัญชี ${acc.username}`}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-slate-500 opacity-0 group-hover:opacity-100 hover:text-rose-400 hover:bg-white/[0.06] transition-all cursor-pointer"
+                      className="absolute right-2 top-2.5 p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-white/[0.06] transition-colors cursor-pointer"
                     >
                       <Trash2 size={13} />
                     </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         )}
-      </div>
 
-      {/* Sidebar Footer */}
-      <div className="p-3 border-t border-white/[0.07] shrink-0">
-        {shareId ? (
-          <button
-            type="button"
-            onClick={handleExitShareMode}
-            className="w-full px-3 py-2 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
-          >
-            เปิดแดชบอร์ดของฉัน
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('sync');
-              setMobileMenuOpen(false);
-            }}
-            className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors cursor-pointer"
-          >
-            <p className="text-[11px] text-slate-500 truncate">{storageStatusLabel}</p>
-            <p className="mt-0.5 text-xs font-mono text-slate-200 truncate">ห้อง: {syncKey}</p>
-          </button>
-        )}
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="min-h-screen bg-[#0B0E14] text-slate-100 flex">
-      {/* Desktop Sidebar */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-[#0E121B] border-r border-white/[0.08] z-30">
-        {renderSidebarContent()}
-      </aside>
-
-      {/* Mobile Drawer Sidebar */}
-      {mobileMenuOpen && (
-        <div className="fixed inset-0 z-40 lg:hidden flex">
-          <div
-            className="fixed inset-0 bg-black/65"
-            onClick={() => setMobileMenuOpen(false)}
-          />
-          <aside className="relative w-72 max-w-[85vw] bg-[#0E121B] border-r border-white/[0.08] z-10 h-full">
-            {renderSidebarContent()}
-          </aside>
-        </div>
-      )}
-
-      {/* Main Content Area */}
-      <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
-        {/* Top Bar Contract */}
-        <header className="sticky top-0 z-20 h-14 px-4 sm:px-8 bg-[#0B0E14]/90 backdrop-blur-md border-b border-white/[0.08] flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(true)}
-              aria-label="เปิดเมนู"
-              className="lg:hidden p-1.5 -ml-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/[0.06] cursor-pointer"
-            >
-              <Menu size={18} />
-            </button>
-
-            <div className="flex items-center gap-2 text-sm min-w-0 truncate">
-              <span className="text-slate-500 hidden sm:inline whitespace-nowrap">
-                {shareId ? 'ลิ้งค์เช็คของ' : 'Anime Adventures'}
-              </span>
-              <span className="text-slate-600 hidden sm:inline">/</span>
-              <span className="font-medium text-slate-100 truncate">
-                {TAB_TITLES[activeTab]}
-              </span>
+        {/* Active View Content */}
+        {loading ? (
+          <div className="space-y-4 animate-pulse">
+            <div className="h-32 rounded-3xl bg-[#0B0E11] border border-white/[0.06]" />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-24 rounded-2xl bg-[#0B0E11] border border-white/[0.06]" />
+              ))}
             </div>
           </div>
-
-          <div className="flex items-center gap-3 shrink-0">
-            {shareId ? (
+        ) : loadError ? (
+          <div className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] px-6 py-12 text-center">
+            <p className="font-display text-lg font-bold text-white">{loadError}</p>
+            <div className="mt-6 flex items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={handleExitShareMode}
-                className="px-4 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                onClick={() => fetchAccounts(false)}
+                className="px-6 py-2.5 text-sm font-bold rounded-full bg-[#10F5A0] text-[#04150E] hover:bg-[#28FFA9] transition-colors cursor-pointer"
               >
-                ใช้งานแดชบอร์ด
+                ลองใหม่อีกครั้ง
               </button>
-            ) : activeAccount ? (
-              <button
-                type="button"
-                onClick={() => setShareModalOpen(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Share2 size={14} />
-                <span>แชร์ลิ้งค์เช็คของ</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setActiveTab('sync')}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Code2 size={14} />
-                <span>คัดลอกสคริปต์ Lua</span>
-              </button>
-            )}
-          </div>
-        </header>
-
-        {/* Main Viewport */}
-        <main className="flex-1 w-full max-w-[1200px] mx-auto px-4 sm:px-8 py-6 sm:py-8">
-          {loading ? (
-            <div className="space-y-6 animate-pulse">
-              <div className="h-8 w-56 rounded-lg bg-white/[0.06]" />
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="h-24 rounded-xl bg-[#121620] border border-white/[0.06]" />
-                ))}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                {[1, 2, 3, 4, 5, 6].map((i) => (
-                  <div key={i} className="h-20 rounded-xl bg-[#121620] border border-white/[0.06]" />
-                ))}
-              </div>
-            </div>
-          ) : loadError ? (
-            <div className="rounded-xl bg-[#121620] border border-white/[0.08] p-12 text-center">
-              <p className="text-base font-medium text-slate-200">{loadError}</p>
-              <div className="mt-5 flex items-center justify-center gap-3">
+              {shareId && (
                 <button
                   type="button"
-                  onClick={() => fetchAccounts(false)}
-                  className="px-4 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors cursor-pointer"
+                  onClick={handleExitShareMode}
+                  className="px-5 py-2.5 text-sm font-medium rounded-full bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:text-white transition-colors cursor-pointer"
                 >
-                  ลองใหม่อีกครั้ง
+                  กลับหน้าหลัก
                 </button>
-                {shareId && (
-                  <button
-                    type="button"
-                    onClick={handleExitShareMode}
-                    className="px-4 py-2 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
-                  >
-                    กลับหน้าหลัก
-                  </button>
-                )}
-              </div>
+              )}
             </div>
-          ) : activeTab === 'sync' && !shareId ? (
-            <LuaSyncView
-              syncKey={syncKey}
-              cloudflareUrl={cloudflareUrl}
-              backendProvider={backendProvider}
-              accounts={accounts}
-              liveConnected={liveConnected}
-              onChangeSyncKey={handleChangeSyncKey}
-              onConnectCloudflare={handleConnectCloudflare}
-              onDisconnectCloudflare={handleDisconnectCloudflare}
-              onOpenAccount={(accountId) => {
-                setSelectedAccountId(accountId);
-                setActiveTab('overview');
-              }}
-              onSubmitScriptPacket={submitScriptPacket}
-            />
-          ) : !activeAccount ? (
-            <div className="rounded-xl bg-[#121620] border border-white/[0.08] p-12 text-center max-w-xl mx-auto mt-6">
-              <h1 className="text-lg font-semibold text-slate-100">
-                กำลังรอข้อมูลจากสคริปต์ในเกมอัตโนมัติ
-              </h1>
-              <p className="mt-2 text-sm text-slate-400 leading-relaxed">
-                คัดลอกสคริปต์ Lua ไปรันในแมพ Anime Adventures แล้วข้อมูลทีม 6 ตัว กระเป๋า และของที่ดรอปจะเด้งขึ้นมาเองทันทีโดยไม่ต้องกรอกลิงก์เพิ่ม
+          </div>
+        ) : activeTab === 'sync' && !shareId ? (
+          <LuaSyncView
+            syncKey={syncKey}
+            cloudflareUrl={cloudflareUrl}
+            backendProvider={backendProvider}
+            accounts={accounts}
+            liveConnected={liveConnected}
+            onChangeSyncKey={handleChangeSyncKey}
+            onConnectCloudflare={handleConnectCloudflare}
+            onDisconnectCloudflare={handleDisconnectCloudflare}
+            onOpenAccount={(accountId) => {
+              setSelectedAccountId(accountId);
+              setActiveTab('overview');
+            }}
+            onSubmitScriptPacket={submitScriptPacket}
+          />
+        ) : !activeAccount ? (
+          /* Empty State Card styled identically to uniqueclub-opm.vercel.app */
+          <section className="space-y-4">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#10F5A0] shadow-[0_0_10px_#10F5A0]" />
+              <h2 className="font-display text-lg sm:text-xl font-bold text-white">
+                บัญชีที่ซิงค์เข้ามา <span className="text-[#10F5A0]">(0)</span>
+              </h2>
+            </div>
+
+            <div className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] px-6 py-14 text-center">
+              <div className="w-16 h-16 mx-auto rounded-2xl bg-[#10F5A0]/10 border border-[#10F5A0]/25 flex items-center justify-center text-[#10F5A0] shadow-[0_0_24px_rgba(16,245,160,0.14)]">
+                <Sparkles size={26} />
+              </div>
+
+              <h3 className="mt-6 font-display text-xl sm:text-2xl font-bold text-white">
+                ยังไม่มีบัญชีที่ซิงค์เข้ามา
+              </h3>
+              <p className="mt-2 text-xs sm:text-sm text-zinc-400 max-w-md mx-auto leading-relaxed">
+                คัดลอกสคริปต์ 1 บรรทัดไปรันในแมพ Anime Adventures แล้วทีม 6 ตัว กระเป๋าไอเทม
+                และประวัติของดรอปจะเด้งขึ้นมาและบันทึกค้างไว้ให้อัตโนมัติ
               </p>
-              <div className="mt-6 flex items-center justify-center">
+
+              <div className="mt-8">
                 <button
                   type="button"
                   onClick={() => setActiveTab('sync')}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-2 px-7 py-3.5 text-sm font-bold rounded-full bg-[#10F5A0] text-[#04150E] hover:bg-[#28FFA9] shadow-[0_0_28px_rgba(16,245,160,0.38)] transition-all cursor-pointer"
                 >
-                  <Code2 size={14} />
-                  <span>ไปคัดลอกสคริปต์ Lua</span>
+                  <span>ไปคัดลอกสคริปต์ 1 บรรทัด</span>
+                  <ArrowRight size={16} />
                 </button>
               </div>
             </div>
-          ) : activeTab === 'overview' ? (
-            <TeamOverview
-              account={activeAccount}
-              nowTs={nowTs}
-              onSelectCategory={(group) => {
-                setInventoryGroup(group);
-                setActiveTab('inventory');
-              }}
-              onGoDrops={() => setActiveTab('drops')}
-            />
-          ) : activeTab === 'inventory' ? (
-            <InventoryView
-              account={activeAccount}
-              initialGroup={inventoryGroup}
-              onGroupChange={setInventoryGroup}
-            />
-          ) : (
-            <DropsView
-              account={activeAccount}
-              isReadOnly={Boolean(shareId)}
-              onClearDrops={handleClearDrops}
-            />
-          )}
-        </main>
-      </div>
+          </section>
+        ) : activeTab === 'overview' ? (
+          <TeamOverview
+            account={activeAccount}
+            nowTs={nowTs}
+            onSelectCategory={(group) => {
+              setInventoryGroup(group);
+              setActiveTab('inventory');
+            }}
+            onGoDrops={() => setActiveTab('drops')}
+          />
+        ) : activeTab === 'inventory' ? (
+          <InventoryView
+            account={activeAccount}
+            initialGroup={inventoryGroup}
+            onGroupChange={setInventoryGroup}
+          />
+        ) : (
+          <DropsView
+            account={activeAccount}
+            isReadOnly={Boolean(shareId)}
+            onClearDrops={handleClearDrops}
+          />
+        )}
+      </main>
+
+      {/* Anchored Floating Bottom Navigation Dock (matching uniqueclub-opm.vercel.app) */}
+      <nav
+        aria-label="เมนูหลัก"
+        className="fixed bottom-0 inset-x-0 z-40 px-3 pb-3 pt-4 bg-gradient-to-t from-[#050709] via-[#050709]/95 to-transparent pointer-events-none"
+      >
+        <div
+          className={`max-w-lg mx-auto pointer-events-auto rounded-2xl bg-[#0C0F13]/95 backdrop-blur-xl border border-white/[0.10] p-1.5 grid gap-1 shadow-[0_12px_40px_rgba(0,0,0,0.8)] ${
+            visibleNavItems.length === 3 ? 'grid-cols-3' : 'grid-cols-4'
+          }`}
+        >
+          {visibleNavItems.map((item) => {
+            const Icon = item.icon;
+            const active = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveTab(item.id)}
+                className={`flex flex-col items-center justify-center gap-1 py-2 px-2 rounded-xl transition-all cursor-pointer ${
+                  active
+                    ? 'bg-[#1A1F26] border border-white/[0.10] text-white shadow-sm'
+                    : 'border border-transparent text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <Icon
+                  size={18}
+                  className={active ? 'text-[#10F5A0]' : 'text-zinc-400'}
+                />
+                <span className="text-[11px] font-semibold leading-none whitespace-nowrap">
+                  {item.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
 
       {/* Live Toast Notifications */}
       {toasts.length > 0 && (
         <div
           aria-live="polite"
-          className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)] pointer-events-none"
+          className="fixed bottom-24 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)] pointer-events-none"
         >
           {toasts.map((t) => (
             <div
               key={t.uid}
-              className="pointer-events-auto rounded-lg bg-[#141926]/95 backdrop-blur-md px-4 py-3 shadow-lg"
+              className="pointer-events-auto rounded-2xl bg-[#0C1014]/95 backdrop-blur-md px-4 py-3 shadow-xl"
               style={{ border: `1px solid ${t.border}` }}
             >
               <p className="text-xs font-semibold truncate" style={{ color: t.color }}>
                 {t.title}
               </p>
-              <p className="mt-0.5 text-[11px] font-mono text-slate-400">{t.subtitle}</p>
+              <p className="mt-0.5 text-[11px] font-mono text-zinc-400">{t.subtitle}</p>
             </div>
           ))}
         </div>

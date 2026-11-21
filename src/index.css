@@ -2,6 +2,7 @@
 
 @theme {
   --font-sans: "Plus Jakarta Sans", "Noto Sans Thai", system-ui, -apple-system, sans-serif;
+  --font-display: "Kanit", "Plus Jakarta Sans", "Noto Sans Thai", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -12,9 +13,19 @@
   }
 
   body {
-    background-color: #0b0e14;
-    color: #f1f5f9;
+    background-color: #050709;
+    background-image: radial-gradient(
+      ellipse 72% 440px at 50% 0%,
+      rgba(16, 245, 160, 0.13),
+      transparent 72%
+    );
+    background-repeat: no-repeat;
+    color: #f4f4f5;
     letter-spacing: 0.005em;
+  }
+
+  .font-display {
+    font-family: var(--font-display);
   }
 
   .tabular-nums {
@@ -22,7 +33,6 @@
   }
 }
 
-/* Subtle dark scrollbar for dense inventory & drop tables */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -33,10 +43,10 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22);
-  border-radius: 3px;
+  background: rgba(16, 245, 160, 0.18);
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.38);
+  background: rgba(16, 245, 160, 0.35);
 }

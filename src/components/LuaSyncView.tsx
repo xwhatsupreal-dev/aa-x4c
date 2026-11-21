@@ -266,34 +266,32 @@ export function LuaSyncView({
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-50">
-          สคริปต์เชื่อมต่อเกม (1 บรรทัดพร้อมรัน)
-        </h1>
-        <p className="mt-1 text-sm text-slate-400">
-          เว็บโฮสต์ไฟล์สคริปต์ให้ในตัวแล้ว แค่คัดลอกคำสั่ง <code className="font-mono text-slate-200">loadstring</code> บรรทัดเดียวไปรันใน Anime Adventures ได้เลยโดยไม่ต้องฝาก Pastebin เอง
-        </p>
+    <div className="space-y-5">
+      {/* Section Header */}
+      <div className="flex items-center gap-2.5">
+        <span className="w-2.5 h-2.5 rounded-full bg-[#10F5A0] shadow-[0_0_10px_#10F5A0]" />
+        <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
+          สคริปต์เชื่อมต่อเกม <span className="text-[#10F5A0]">(1 บรรทัด)</span>
+        </h2>
       </div>
 
       {/* Auto-Sync Status Bar */}
-      <section className="rounded-xl bg-[#121620] border border-white/[0.08] p-5">
+      <section className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <p className="text-xs text-slate-400">
-              โหมดการเชื่อมต่อ: <span className="text-slate-200">{providerLabel}</span>
+            <p className="text-xs text-zinc-400">
+              โหมดการเชื่อมต่อ: <span className="text-zinc-100 font-medium">{providerLabel}</span>
               {' · '}
-              ห้อง: <span className="font-mono text-slate-200">{syncKey}</span>
+              ห้อง: <span className="font-mono text-[#10F5A0]">{syncKey}</span>
             </p>
-            <p className="mt-1 text-sm font-medium text-slate-100">
+            <p className="mt-1 text-sm font-medium text-white">
               {accounts.length > 0
                 ? `บันทึกข้อมูลจริงแล้ว ${accounts.length} บัญชี (ค้างไว้ดูได้ตลอดแม้ออฟไลน์)`
-                : 'กำลังรอข้อมูลจากสคริปต์ในเกม — รันคำสั่งด้านล่างแล้วหน้านี้จะโหลดข้อมูลให้อัตโนมัติทันที'}
+                : 'กำลังรอข้อมูลจากสคริปต์ในเกม — รันคำสั่งด้านล่างแล้วข้อมูลจะเด้งเข้าเว็บอัตโนมัติ'}
             </p>
           </div>
-          <span className="text-xs font-mono text-emerald-400 whitespace-nowrap shrink-0">
-            {liveConnected || backendProvider ? 'พร้อมรับข้อมูลอัตโนมัติ' : 'กำลังเชื่อมต่อ'}
+          <span className="text-xs font-mono text-[#10F5A0] whitespace-nowrap shrink-0">
+            {liveConnected || backendProvider ? '● พร้อมรับข้อมูลอัตโนมัติ' : 'กำลังเชื่อมต่อ'}
           </span>
         </div>
 
@@ -305,11 +303,11 @@ export function LuaSyncView({
                 className="py-2.5 flex items-center justify-between gap-4"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-100 truncate">
+                  <p className="text-sm font-medium text-white truncate">
                     {acc.displayName}{' '}
-                    <span className="text-slate-500">(@{acc.username})</span>
+                    <span className="text-zinc-500">(@{acc.username})</span>
                   </p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-zinc-500">
                     ซิงค์ล่าสุด {formatRelativeTime(acc.lastSyncedAt)} · ทีม {acc.equipped.length}/6 · ไอเทม{' '}
                     {acc.inventory.length} ชนิด
                   </p>
@@ -317,7 +315,7 @@ export function LuaSyncView({
                 <button
                   type="button"
                   onClick={() => onOpenAccount(acc.accountId)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="px-3.5 py-1.5 text-xs font-semibold rounded-full bg-[#14191F] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   เปิดดูของ
                 </button>
@@ -328,24 +326,24 @@ export function LuaSyncView({
       </section>
 
       {/* Primary 1-Line Loadstring Card */}
-      <section className="rounded-xl bg-[#121620] border border-white/[0.08] overflow-hidden">
+      <section className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] overflow-hidden">
         <div className="p-5 border-b border-white/[0.08] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-slate-100">
-              สคริปต์แบบสั้น (1 บรรทัด — โฮสต์ตรงบนเว็บนี้)
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              คัดลอกบรรทัดเดียวไปวางในตัวรัน Roblox ได้เลย ไม่ต้องก๊อปโค้ดยาวๆ และไม่ต้องอัปโหลดขึ้น Pastebin
+            <h3 className="font-display text-base font-bold text-white">
+              คำสั่งรันแบบสั้น (โฮสต์ตรงบนเว็บนี้)
+            </h3>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              คัดลอก 1 บรรทัดไปรันในตัวรัน Roblox ได้เลย ไม่ต้องฝาก Pastebin เอง
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <label className="inline-flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg bg-[#0B0E14] border border-white/[0.10] text-slate-300 cursor-pointer select-none">
+            <label className="inline-flex items-center gap-2 px-3 py-1.5 text-xs rounded-xl bg-[#050709] border border-white/[0.10] text-zinc-300 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={showInGameGui}
                 onChange={(e) => setShowInGameGui(e.target.checked)}
-                className="accent-[#4F6EF7] rounded"
+                className="accent-[#10F5A0] rounded"
               />
               <span>แสดง GUI ในเกม</span>
             </label>
@@ -354,7 +352,7 @@ export function LuaSyncView({
               value={intervalSec}
               onChange={(e) => setIntervalSec(Number(e.target.value))}
               aria-label="ความถี่ในการซิงค์"
-              className="px-3 py-1.5 text-xs rounded-lg bg-[#0B0E14] border border-white/[0.10] text-slate-200 focus:outline-none focus:border-[#4F6EF7] cursor-pointer"
+              className="px-3 py-1.5 text-xs rounded-xl bg-[#050709] border border-white/[0.10] text-zinc-200 focus:outline-none focus:border-[#10F5A0]/60 cursor-pointer"
             >
               <option value={5}>ซิงค์ทุก 5 วินาที</option>
               <option value={10}>ซิงค์ทุก 10 วินาที</option>
@@ -363,36 +361,36 @@ export function LuaSyncView({
           </div>
         </div>
 
-        <div className="p-5 space-y-3 bg-[#0A0D13]">
-          <div className="rounded-lg bg-[#0E121B] border border-white/[0.10] px-4 py-3.5 overflow-x-auto">
-            <code className="text-xs sm:text-sm font-mono text-emerald-300 whitespace-nowrap select-all">
+        <div className="p-5 space-y-4 bg-[#080B0E]">
+          <div className="rounded-2xl bg-[#050709] border border-[#10F5A0]/25 px-4 py-4 overflow-x-auto">
+            <code className="text-xs sm:text-sm font-mono text-[#10F5A0] whitespace-nowrap select-all">
               {shortLoadstring}
             </code>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
               onClick={handleCopyLoader}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap cursor-pointer"
+              className="inline-flex items-center gap-2 px-6 py-2.5 text-xs sm:text-sm font-bold rounded-full bg-[#10F5A0] text-[#04150E] hover:bg-[#28FFA9] shadow-[0_0_24px_rgba(16,245,160,0.3)] transition-all whitespace-nowrap cursor-pointer"
             >
-              {copiedLoader ? <Check size={14} /> : <Copy size={14} />}
+              {copiedLoader ? <Check size={15} /> : <Copy size={15} />}
               <span>{copiedLoader ? 'คัดลอกสคริปต์สั้นแล้ว' : 'คัดลอกสคริปต์ (1 บรรทัด)'}</span>
             </button>
 
             <button
               type="button"
               onClick={handleCopyRawUrl}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors whitespace-nowrap cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium rounded-full bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
             >
-              {copiedRawUrl ? <Check size={14} /> : <Copy size={14} />}
+              {copiedRawUrl ? <Check size={14} className="text-[#10F5A0]" /> : <Copy size={14} />}
               <span>{copiedRawUrl ? 'คัดลอกลิงก์แล้ว' : 'คัดลอกลิงก์ Raw'}</span>
             </button>
 
             <button
               type="button"
               onClick={() => setShowFullCode((v) => !v)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-transparent border border-white/[0.08] text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors whitespace-nowrap cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium rounded-full bg-transparent border border-white/[0.08] text-zinc-400 hover:text-white hover:bg-white/[0.04] transition-colors whitespace-nowrap cursor-pointer"
             >
               {showFullCode ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               <span>{showFullCode ? 'ซ่อนโค้ดเต็ม' : 'ดูโค้ดเต็ม / ดาวน์โหลด .lua'}</span>
@@ -402,76 +400,74 @@ export function LuaSyncView({
 
         {showFullCode && (
           <div className="border-t border-white/[0.08]">
-            <div className="px-5 py-3 bg-[#121620] border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs text-slate-400 truncate">
-                ส่งข้อมูลไปที่: <code className="font-mono text-slate-200">{activeSyncEndpoint}</code>
+            <div className="px-5 py-3 bg-[#0B0E11] border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-zinc-400 truncate">
+                ส่งข้อมูลไปที่: <code className="font-mono text-zinc-200">{activeSyncEndpoint}</code>
               </p>
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={handleCopyScript}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:text-white transition-colors cursor-pointer"
                 >
-                  {copiedScript ? <Check size={13} /> : <Copy size={13} />}
+                  {copiedScript ? <Check size={13} className="text-[#10F5A0]" /> : <Copy size={13} />}
                   <span>{copiedScript ? 'คัดลอกโค้ดเต็มแล้ว' : 'คัดลอกโค้ดเต็ม'}</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleDownloadLua}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:text-white transition-colors cursor-pointer"
                 >
                   <Download size={13} />
                   <span>ดาวน์โหลด .lua</span>
                 </button>
               </div>
             </div>
-            <pre className="p-5 overflow-x-auto max-h-[380px] text-xs leading-relaxed font-mono text-slate-300 bg-[#080A0F]">
+            <pre className="p-5 overflow-x-auto max-h-[380px] text-xs leading-relaxed font-mono text-zinc-300 bg-[#050709]">
               <code>{luaScript}</code>
             </pre>
           </div>
         )}
       </section>
 
-      {/* Collapsible Advanced Settings (Optional Sync Key, Cloudflare override, Clipboard fallback) */}
-      <section className="rounded-xl bg-[#121620] border border-white/[0.08] overflow-hidden">
+      {/* Collapsible Advanced Settings */}
+      <section className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] overflow-hidden">
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
           className="w-full px-5 py-4 flex items-center justify-between gap-4 text-left hover:bg-white/[0.02] transition-colors cursor-pointer"
         >
           <div className="flex items-center gap-2.5 min-w-0">
-            <Settings2 size={16} className="text-slate-400 shrink-0" />
-            <div>
-              <p className="text-sm font-medium text-slate-200">
-                ตั้งค่าเพิ่มเติม (ไม่จำเป็นต้องตั้งค่า — เปลี่ยนรหัสห้อง / วางคลิปบอร์ด / เชื่อม Cloudflare แยก)
-              </p>
-            </div>
+            <Settings2 size={16} className="text-zinc-400 shrink-0" />
+            <p className="text-sm font-medium text-zinc-200">
+              ตั้งค่าเพิ่มเติม (เปลี่ยนรหัสห้อง / วางคลิปบอร์ด / Cloudflare แยก)
+            </p>
           </div>
           {showAdvanced ? (
-            <ChevronUp size={16} className="text-slate-400 shrink-0" />
+            <ChevronUp size={16} className="text-zinc-400 shrink-0" />
           ) : (
-            <ChevronDown size={16} className="text-slate-400 shrink-0" />
+            <ChevronDown size={16} className="text-zinc-400 shrink-0" />
           )}
         </button>
 
         {showAdvanced && (
-          <div className="border-t border-white/[0.08] p-5 space-y-6 bg-[#0D1018]">
+          <div className="border-t border-white/[0.08] p-5 space-y-6 bg-[#080B0E]">
             {/* Sync Key */}
             <div className="space-y-2">
-              <h3 className="text-xs font-semibold text-slate-200">
-                รหัสห้องซิงค์ (Sync Key) — ค่าเริ่มต้นคือ "main" เพื่อเปิดดูได้จากทุกเครื่องอัตโนมัติ
+              <h3 className="text-xs font-semibold text-zinc-200">
+                รหัสห้องซิงค์ (Sync Key) — ค่าเริ่มต้นคือ "main" เพื่อให้ทุกคนเห็นเหมือนกัน
               </h3>
               <div className="flex flex-col sm:flex-row gap-2 max-w-md">
                 <input
                   type="text"
                   value={keyInput}
                   onChange={(e) => setKeyInput(e.target.value)}
-                  className="flex-1 px-3 py-1.5 text-xs font-mono rounded-lg bg-[#0B0E14] border border-white/[0.10] text-slate-100 focus:outline-none focus:border-[#4F6EF7]"
+                  className="flex-1 px-3.5 py-2 text-xs font-mono rounded-xl bg-[#050709] border border-white/[0.10] text-zinc-100 focus:outline-none focus:border-[#10F5A0]/60"
                 />
                 <button
                   type="button"
                   onClick={handleApplyKey}
-                  className="px-3.5 py-1.5 text-xs font-medium rounded-lg bg-[#4F6EF7] text-white hover:bg-[#3F5EE8] transition-colors whitespace-nowrap cursor-pointer"
+                  className="px-4 py-2 text-xs font-bold rounded-xl bg-[#10F5A0] text-[#04150E] hover:bg-[#28FFA9] transition-colors whitespace-nowrap cursor-pointer"
                 >
                   ใช้รหัสนี้
                 </button>
@@ -480,7 +476,7 @@ export function LuaSyncView({
                   onClick={handleGeneratePrivateKey}
                   title="สุ่มรหัสส่วนตัว"
                   aria-label="สุ่มรหัสส่วนตัว"
-                  className="p-1.5 rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-300 hover:text-white transition-colors cursor-pointer"
+                  className="p-2 rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-300 hover:text-white transition-colors cursor-pointer"
                 >
                   <RefreshCw size={14} />
                 </button>
@@ -491,10 +487,10 @@ export function LuaSyncView({
             <div className="pt-5 border-t border-white/[0.07] space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                  <h3 className="text-xs font-semibold text-slate-200">
-                    นำเข้าผ่านคลิปบอร์ด / ไฟล์ workspace (สำรองกรณีรันผ่านหน้า Preview)
+                  <h3 className="text-xs font-semibold text-zinc-200">
+                    นำเข้าผ่านคลิปบอร์ด / ไฟล์ workspace (ตัวเลือกสำรอง)
                   </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
+                  <p className="text-xs text-zinc-500 mt-0.5">
                     กด "คัดลอกข้อมูลเข้าเว็บ" ในเกมแล้วกด Ctrl+V ที่หน้าเว็บนี้ได้เลย
                   </p>
                 </div>
@@ -503,7 +499,7 @@ export function LuaSyncView({
                     type="button"
                     onClick={handleReadClipboard}
                     disabled={syncingPaste}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-100 hover:bg-[#1E2538] transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-100 hover:border-[#10F5A0]/40 transition-colors cursor-pointer"
                   >
                     <ClipboardPaste size={13} />
                     <span>วางจากคลิปบอร์ด</span>
@@ -519,7 +515,7 @@ export function LuaSyncView({
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={syncingPaste}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 transition-colors cursor-pointer"
                   >
                     <FileUp size={13} />
                     <span>เลือกไฟล์ .json</span>
@@ -540,13 +536,13 @@ export function LuaSyncView({
                     }
                   }}
                   placeholder='คลิกแล้วกด Ctrl+V เพื่อวาง AAVAULT_SYNC::...'
-                  className="flex-1 px-3 py-1.5 text-xs font-mono rounded-lg bg-[#0B0E14] border border-white/[0.10] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-[#4F6EF7]"
+                  className="flex-1 px-3.5 py-2 text-xs font-mono rounded-xl bg-[#050709] border border-white/[0.10] text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-[#10F5A0]/60"
                 />
                 <button
                   type="button"
                   onClick={() => processPacket(pasteBox)}
                   disabled={syncingPaste || !pasteBox.trim()}
-                  className="px-3.5 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-100 hover:bg-[#1E2538] disabled:opacity-40 transition-colors cursor-pointer"
+                  className="px-4 py-2 text-xs font-medium rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-100 hover:border-[#10F5A0]/40 disabled:opacity-40 transition-colors cursor-pointer"
                 >
                   บันทึก
                 </button>
@@ -554,7 +550,7 @@ export function LuaSyncView({
               {pasteFeedback.type !== 'idle' && (
                 <p
                   className={`text-xs ${
-                    pasteFeedback.type === 'success' ? 'text-emerald-400' : 'text-rose-400'
+                    pasteFeedback.type === 'success' ? 'text-[#10F5A0]' : 'text-rose-400'
                   }`}
                 >
                   {pasteFeedback.text}
@@ -566,11 +562,11 @@ export function LuaSyncView({
             <div className="pt-5 border-t border-white/[0.07] space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                  <h3 className="text-xs font-semibold text-slate-200">
+                  <h3 className="text-xs font-semibold text-zinc-200">
                     เชื่อมต่อ Cloudflare Worker แยก (ตัวเลือกเสริม)
                   </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    หาก Deploy บน Vercel สามารถผูก Storage (Vercel KV / Upstash Redis) หรือใส่ Env Cloudflare KV ใน Vercel Dashboard ได้โดยไม่ต้องกรอกลิงก์ตรงนี้
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    หากผูก Upstash Redis บน Vercel แล้วไม่จำเป็นต้องตั้งค่าส่วนนี้
                   </p>
                 </div>
                 {cloudflareUrl && (
@@ -581,7 +577,7 @@ export function LuaSyncView({
                       setCfInput('');
                       setCfStatus({ type: 'idle', text: '' });
                     }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-300 hover:text-rose-300 cursor-pointer shrink-0"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-300 hover:text-rose-300 cursor-pointer shrink-0"
                   >
                     <Unplug size={13} />
                     <span>ยกเลิก</span>
@@ -595,13 +591,13 @@ export function LuaSyncView({
                   value={cfInput}
                   onChange={(e) => setCfInput(e.target.value)}
                   placeholder="https://aa-vault.your-subdomain.workers.dev"
-                  className="flex-1 px-3 py-1.5 text-xs font-mono rounded-lg bg-[#0B0E14] border border-white/[0.10] text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-[#4F6EF7]"
+                  className="flex-1 px-3.5 py-2 text-xs font-mono rounded-xl bg-[#050709] border border-white/[0.10] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-[#10F5A0]/60"
                 />
                 <button
                   type="button"
                   onClick={handleTestAndSaveCloudflare}
                   disabled={testingCf || !cfInput.trim()}
-                  className="px-3.5 py-1.5 text-xs font-medium rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-100 hover:bg-[#1E2538] disabled:opacity-40 transition-colors whitespace-nowrap cursor-pointer"
+                  className="px-4 py-2 text-xs font-medium rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-100 hover:border-[#10F5A0]/40 disabled:opacity-40 transition-colors whitespace-nowrap cursor-pointer"
                 >
                   {testingCf ? 'กำลังทดสอบ...' : 'เชื่อมต่อ Worker'}
                 </button>
@@ -611,7 +607,7 @@ export function LuaSyncView({
                 <p
                   className={`text-xs ${
                     cfStatus.type === 'success'
-                      ? 'text-emerald-400'
+                      ? 'text-[#10F5A0]'
                       : cfStatus.type === 'warning'
                         ? 'text-amber-300'
                         : 'text-rose-400'
@@ -622,12 +618,12 @@ export function LuaSyncView({
               )}
 
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-                <div className="inline-flex items-center p-1 rounded-lg bg-[#121620] border border-white/[0.08]">
+                <div className="inline-flex items-center p-1 rounded-xl bg-[#0B0E11] border border-white/[0.08]">
                   <button
                     type="button"
                     onClick={() => setWorkerTab('worker')}
-                    className={`px-2.5 py-1 text-xs font-mono rounded-md cursor-pointer ${
-                      workerTab === 'worker' ? 'bg-[#20273A] text-white' : 'text-slate-400'
+                    className={`px-2.5 py-1 text-xs font-mono rounded-lg cursor-pointer ${
+                      workerTab === 'worker' ? 'bg-[#191F24] text-white' : 'text-zinc-400'
                     }`}
                   >
                     worker.js
@@ -635,8 +631,8 @@ export function LuaSyncView({
                   <button
                     type="button"
                     onClick={() => setWorkerTab('wrangler')}
-                    className={`px-2.5 py-1 text-xs font-mono rounded-md cursor-pointer ${
-                      workerTab === 'wrangler' ? 'bg-[#20273A] text-white' : 'text-slate-400'
+                    className={`px-2.5 py-1 text-xs font-mono rounded-lg cursor-pointer ${
+                      workerTab === 'wrangler' ? 'bg-[#191F24] text-white' : 'text-zinc-400'
                     }`}
                   >
                     wrangler.toml
@@ -646,15 +642,15 @@ export function LuaSyncView({
                   <button
                     type="button"
                     onClick={handleCopyWorkerCode}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:text-white cursor-pointer"
                   >
-                    {copiedWorker ? <Check size={13} /> : <Copy size={13} />}
+                    {copiedWorker ? <Check size={13} className="text-[#10F5A0]" /> : <Copy size={13} />}
                     <span>{copiedWorker ? 'คัดลอกแล้ว' : 'คัดลอกโค้ด'}</span>
                   </button>
                   <button
                     type="button"
                     onClick={handleDownloadWorkerCode}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[#171C2B] border border-white/[0.10] text-slate-200 hover:bg-[#1E2538] cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-xl bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:text-white cursor-pointer"
                   >
                     <Download size={13} />
                     <span>ดาวน์โหลด</span>
@@ -662,7 +658,7 @@ export function LuaSyncView({
                 </div>
               </div>
 
-              <pre className="p-3.5 rounded-lg border border-white/[0.07] overflow-x-auto max-h-[220px] text-xs leading-relaxed font-mono text-slate-300 bg-[#080A0F]">
+              <pre className="p-3.5 rounded-2xl border border-white/[0.07] overflow-x-auto max-h-[220px] text-xs leading-relaxed font-mono text-zinc-300 bg-[#050709]">
                 <code>
                   {workerTab === 'worker' ? CLOUDFLARE_WORKER_CODE : WRANGLER_TOML_CODE}
                 </code>
