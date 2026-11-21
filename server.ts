@@ -231,6 +231,37 @@ async function startServer() {
     res.json({ ok: true, serverless: false, provider: 'express', timestamp: Date.now() });
   });
 
+  // Proxy Roblox 3D full-body avatar thumbnail URL for the account profile stage
+  app.get('/api/avatar/:userId', async (req, res) => {
+    const userId = String(req.params.userId || '').trim();
+    if (!/^\d{1,15}$/.test(userId)) {
+      res.status(400).json({ ok: false, error: 'Invalid userId' });
+      return;
+    }
+    try {
+      const upstream = await fetch(
+        `https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`,
+        { headers: { Accept: 'application/json' } }
+      );
+      if (!upstream.ok) {
+        res.json({ ok: false, imageUrl: null });
+        return;
+      }
+      const data = (await upstream.json()) as {
+        data?: Array<{ state?: string; imageUrl?: string }>;
+      };
+      const entry = data?.data?.[0];
+      const imageUrl =
+        entry?.state === 'Completed' && typeof entry.imageUrl === 'string' && entry.imageUrl
+          ? entry.imageUrl
+          : null;
+      res.setHeader('Cache-Control', 'public, max-age=600');
+      res.json({ ok: Boolean(imageUrl), imageUrl });
+    } catch {
+      res.json({ ok: false, imageUrl: null });
+    }
+  });
+
   // Raw Lua loader endpoint so Roblox executors can run a 1-line loadstring(game:HttpGet(...))()
   app.get(['/api/script', '/api/script.lua'], (req, res) => {
     const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')

@@ -2,9 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   Code2,
-  Flame,
   History,
-  LayoutGrid,
+  Package,
   RefreshCw,
   Share2,
   Sparkles,
@@ -17,13 +16,11 @@ import {
   RARITY_META,
 } from './data/aaCatalog.ts';
 import type { AccountSnapshot, RewardEntry, SyncPayload } from './types.ts';
-import { DropsView } from './components/DropsView.tsx';
-import { InventoryView } from './components/InventoryView.tsx';
+import { AccountDashboard, type DashboardTab } from './components/AccountDashboard.tsx';
 import { LuaSyncView } from './components/LuaSyncView.tsx';
 import { ShareModal } from './components/ShareModal.tsx';
-import { TeamOverview } from './components/TeamOverview.tsx';
 
-type NavTab = 'overview' | 'inventory' | 'drops' | 'sync';
+type NavTab = DashboardTab | 'sync';
 
 interface ToastNotification {
   uid: string;
@@ -82,8 +79,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<NavTab>('overview');
-  const [inventoryGroup, setInventoryGroup] = useState<string>('ALL');
+  const [activeTab, setActiveTab] = useState<NavTab>('drops');
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
@@ -209,7 +205,7 @@ export default function App() {
           initialPollDoneRef.current = true;
           setAccounts((prev) => {
             if (prev.length === 0 && list.length > 0 && silent) {
-              setActiveTab('overview');
+              setActiveTab('drops');
             }
             return list;
           });
@@ -304,7 +300,7 @@ export default function App() {
         });
         setSelectedAccountId((prev) => prev ?? payload.account.accountId);
         if (wasEmpty) {
-          setActiveTab('overview');
+          setActiveTab('drops');
         }
         if (Array.isArray(payload.newRewards)) {
           payload.newRewards.slice(0, 3).forEach((r) => pushToast(r));
@@ -427,7 +423,7 @@ export default function App() {
         }
         await fetchAccounts(true);
         setSelectedAccountId(data.accountId);
-        setActiveTab('overview');
+        setActiveTab('drops');
         pushSystemToast(
           `อัปเดตข้อมูลจริงของ ${parsed.username} แล้ว`,
           `ทีม ${parsed.equipped?.length ?? 0} ตัว · ไอเทม ${parsed.inventory?.length ?? 0} ชนิด`,
@@ -479,7 +475,7 @@ export default function App() {
     window.history.replaceState({}, '', url.toString());
     setShareId(null);
     setShareCfUrl('');
-    setActiveTab('overview');
+    setActiveTab('drops');
   };
 
   const handleClearDrops = async () => {
@@ -500,10 +496,10 @@ export default function App() {
     await fetchAccounts(true);
   };
 
-  const navItems: Array<{ id: NavTab; label: string; icon: typeof Flame; hideInShare?: boolean }> = [
-    { id: 'overview', label: 'ทีม 6 ตัว', icon: Flame },
-    { id: 'inventory', label: 'กระเป๋า', icon: LayoutGrid },
+  const navItems: Array<{ id: NavTab; label: string; icon: typeof History; hideInShare?: boolean }> = [
     { id: 'drops', label: 'ของดรอป', icon: History },
+    { id: 'obtained', label: 'ของที่ได้', icon: Sparkles },
+    { id: 'inventory', label: 'กระเป๋า', icon: Package },
     { id: 'sync', label: 'สคริปต์', icon: Code2, hideInShare: true },
   ];
 
@@ -536,11 +532,11 @@ export default function App() {
     <div className="min-h-screen text-zinc-100 pb-28">
       {/* Floating Rounded Top Header (matching uniqueclub-opm.vercel.app) */}
       <header className="sticky top-0 z-30 pt-3 sm:pt-4 px-3 sm:px-6">
-        <div className="max-w-5xl mx-auto rounded-2xl bg-[#0B0E11]/90 backdrop-blur-xl border border-white/[0.09] px-3.5 sm:px-4 h-14 sm:h-16 flex items-center justify-between gap-3 shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+        <div className="max-w-7xl mx-auto rounded-2xl bg-[#0B0E11]/90 backdrop-blur-xl border border-white/[0.09] px-3.5 sm:px-4 h-14 sm:h-16 flex items-center justify-between gap-3 shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
           {/* Brand Logo */}
           <button
             type="button"
-            onClick={() => setActiveTab('overview')}
+            onClick={() => setActiveTab('drops')}
             className="flex items-center gap-2.5 min-w-0 cursor-pointer"
           >
             <svg
@@ -629,78 +625,87 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Centered Container */}
-      <main className="max-w-5xl mx-auto px-3.5 sm:px-6">
-        {/* Centered Hero Section (matching uniqueclub-opm.vercel.app) */}
-        <section className="pt-8 pb-7 sm:pt-11 sm:pb-9 text-center">
-          <div className="inline-flex items-center gap-2 text-[11px] sm:text-xs font-mono font-semibold tracking-wider text-[#10F5A0] uppercase">
-            <Sparkles size={14} className="shrink-0" />
-            <span>
-              {shareId
-                ? '// SHARED INVENTORY SNAPSHOT · READ ONLY'
-                : '// LIVE INVENTORY HUB · ANIME ADVENTURES'}
-            </span>
-          </div>
-
-          <h1 className="mt-3 font-display text-3xl sm:text-5xl font-extrabold tracking-tight leading-tight text-balance">
-            <span className="text-white">เช็คของ </span>
-            <span className="text-[#10F5A0]">Anime Adventures</span>
-          </h1>
-
-          <p className="mt-3 text-xs sm:text-sm text-zinc-400 max-w-lg mx-auto leading-relaxed">
-            เช็คทีม 6 ตัว กระเป๋าไอเทม และของดรอปแบบเรียลไทม์ ซิงค์ตรงจากสคริปต์ในเกม
-            บันทึกค้างไว้ดูได้ตลอดแม้ออฟไลน์
-          </p>
-
-          {/* 3 Rounded Status Capsules (stacked on mobile, inline on desktop) */}
-          <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-2.5">
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
-              <span className="w-2 h-2 rounded-full bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]" />
-              <span className="text-zinc-400">ออนไลน์ตอนนี้:</span>
-              <span className="font-mono font-bold tabular-nums text-[#10F5A0]">
-                {onlineCount}
+      {/* Main Container (wide 7xl when viewing RollinShop-style 2-column dashboard) */}
+      <main
+        className={`mx-auto px-3.5 sm:px-6 ${
+          activeAccount && activeTab !== 'sync' ? 'max-w-7xl pt-4 sm:pt-5' : 'max-w-5xl'
+        }`}
+      >
+        {/* Centered Hero Section shown when no account is active or on the Sync setup page */}
+        {(!activeAccount || activeTab === 'sync') && (
+          <section className="pt-8 pb-7 sm:pt-10 sm:pb-8 text-center">
+            <div className="inline-flex items-center gap-2 text-[11px] sm:text-xs font-mono font-semibold tracking-wider text-[#10F5A0] uppercase">
+              <Sparkles size={14} className="shrink-0" />
+              <span>
+                {shareId
+                  ? '// SHARED INVENTORY SNAPSHOT · READ ONLY'
+                  : '// LIVE INVENTORY HUB · ANIME ADVENTURES'}
               </span>
-              <span className="font-semibold text-[#10F5A0]">บัญชี</span>
             </div>
 
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
-              <span className="text-zinc-400">บันทึกไว้ทั้งหมด:</span>
-              <span className="font-mono font-bold tabular-nums text-white">
-                {accounts.length}
-              </span>
-              <span className="font-semibold text-white">บัญชี</span>
-            </div>
+            <h1 className="mt-3 font-display text-3xl sm:text-5xl font-extrabold tracking-tight leading-tight text-balance">
+              <span className="text-white">เช็คของ </span>
+              <span className="text-[#10F5A0]">Anime Adventures</span>
+            </h1>
 
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
-              <span className="text-zinc-400">ระบบจัดเก็บ:</span>
-              <span className="font-semibold text-white">{storageShortLabel}</span>
+            <p className="mt-3 text-xs sm:text-sm text-zinc-400 max-w-lg mx-auto leading-relaxed">
+              เช็คทีม 6 ตัว กระเป๋าไอเทม และของดรอปแบบเรียลไทม์ ซิงค์ตรงจากสคริปต์ในเกม
+              บันทึกค้างไว้ดูได้ตลอดแม้ออฟไลน์
+            </p>
+
+            {/* 3 Rounded Status Capsules */}
+            <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-2.5">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
+                <span className="w-2 h-2 rounded-full bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]" />
+                <span className="text-zinc-400">ออนไลน์ตอนนี้:</span>
+                <span className="font-mono font-bold tabular-nums text-[#10F5A0]">
+                  {onlineCount}
+                </span>
+                <span className="font-semibold text-[#10F5A0]">บัญชี</span>
+              </div>
+
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
+                <span className="text-zinc-400">บันทึกไว้ทั้งหมด:</span>
+                <span className="font-mono font-bold tabular-nums text-white">
+                  {accounts.length}
+                </span>
+                <span className="font-semibold text-white">บัญชี</span>
+              </div>
+
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#0C1014] border border-white/[0.09] text-xs sm:text-sm">
+                <span className="text-zinc-400">ระบบจัดเก็บ:</span>
+                <span className="font-semibold text-white">{storageShortLabel}</span>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
 
         {/* Horizontal Saved Account Selector Strip (when accounts exist) */}
         {!shareId && accounts.length > 0 && (
-          <section aria-label="เลือกบัญชีที่บันทึกไว้" className="mb-6">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#10F5A0] shadow-[0_0_10px_#10F5A0]" />
-                <h2 className="font-display text-base sm:text-lg font-bold text-white">
+          <section aria-label="เลือกบัญชีที่บันทึกไว้" className="mb-4">
+            <div className="flex items-center justify-between gap-2 mb-2.5">
+              <div className="flex items-center gap-2 text-xs sm:text-sm">
+                <span className="w-2 h-2 rounded-full bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]" />
+                <span className="font-display font-bold text-white">
                   บัญชีที่บันทึกไว้ <span className="text-[#10F5A0]">({accounts.length})</span>
-                </h2>
+                </span>
+                <span className="text-xs text-zinc-500 hidden sm:inline">
+                  · ออนไลน์ {onlineCount} บัญชี · {storageShortLabel}
+                </span>
               </div>
-              <span className="text-xs text-zinc-500">แตะเพื่อสลับดูของ</span>
+              <span className="text-[11px] text-zinc-500">แตะเพื่อสลับไอดี</span>
             </div>
 
-            <div className="flex items-stretch gap-2.5 overflow-x-auto pb-2">
+            <div className="flex items-stretch gap-2 overflow-x-auto pb-1.5">
               {accounts.map((acc) => {
                 const selected = activeAccount?.accountId === acc.accountId && activeTab !== 'sync';
                 const online = isAccountOnline(acc.lastSyncedAt, nowTs);
                 return (
                   <div
                     key={acc.accountId}
-                    className={`group relative shrink-0 min-w-[205px] max-w-[240px] rounded-2xl border transition-all ${
+                    className={`group relative shrink-0 min-w-[195px] max-w-[235px] rounded-2xl border transition-all ${
                       selected
-                        ? 'bg-[#101816] border-[#10F5A0]/50 shadow-[0_0_20px_rgba(16,245,160,0.10)]'
+                        ? 'bg-[#101816] border-[#10F5A0]/55 shadow-[0_0_18px_rgba(16,245,160,0.10)]'
                         : 'bg-[#0B0E11] border-white/[0.08] hover:border-white/[0.16]'
                     }`}
                   >
@@ -708,9 +713,9 @@ export default function App() {
                       type="button"
                       onClick={() => {
                         setSelectedAccountId(acc.accountId);
-                        if (activeTab === 'sync') setActiveTab('overview');
+                        if (activeTab === 'sync') setActiveTab('drops');
                       }}
-                      className="w-full text-left px-3.5 py-3 pr-9 cursor-pointer"
+                      className="w-full text-left px-3.5 py-2.5 pr-9 cursor-pointer"
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <span
@@ -722,11 +727,11 @@ export default function App() {
                           {acc.displayName}
                         </p>
                       </div>
-                      <p className="mt-1 text-[11px] font-mono tabular-nums text-zinc-400 truncate">
+                      <p className="mt-0.5 text-[11px] font-mono tabular-nums text-zinc-400 truncate">
                         {formatCompact(acc.gems)} Gems · {formatCompact(acc.gold)} Gold
                       </p>
                       <p
-                        className={`mt-0.5 text-[11px] truncate ${
+                        className={`mt-0.5 text-[10px] truncate ${
                           online ? 'text-[#10F5A0]' : 'text-zinc-500'
                         }`}
                       >
@@ -742,7 +747,7 @@ export default function App() {
                       }}
                       title={`ลบบัญชี ${acc.username}`}
                       aria-label={`ลบบัญชี ${acc.username}`}
-                      className="absolute right-2 top-2.5 p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-white/[0.06] transition-colors cursor-pointer"
+                      className="absolute right-2 top-2 p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-white/[0.06] transition-colors cursor-pointer"
                     >
                       <Trash2 size={13} />
                     </button>
@@ -755,13 +760,9 @@ export default function App() {
 
         {/* Active View Content */}
         {loading ? (
-          <div className="space-y-4 animate-pulse">
-            <div className="h-32 rounded-3xl bg-[#0B0E11] border border-white/[0.06]" />
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="h-24 rounded-2xl bg-[#0B0E11] border border-white/[0.06]" />
-              ))}
-            </div>
+          <div className="grid grid-cols-1 lg:grid-cols-[21.5rem_minmax(0,1fr)] gap-4 animate-pulse">
+            <div className="h-[34rem] rounded-3xl bg-[#0B0E11] border border-white/[0.06]" />
+            <div className="h-[34rem] rounded-3xl bg-[#0B0E11] border border-white/[0.06]" />
           </div>
         ) : loadError ? (
           <div className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] px-6 py-12 text-center">
@@ -797,7 +798,7 @@ export default function App() {
             onDisconnectCloudflare={handleDisconnectCloudflare}
             onOpenAccount={(accountId) => {
               setSelectedAccountId(accountId);
-              setActiveTab('overview');
+              setActiveTab('drops');
             }}
             onSubmitScriptPacket={submitScriptPacket}
           />
@@ -836,26 +837,18 @@ export default function App() {
               </div>
             </div>
           </section>
-        ) : activeTab === 'overview' ? (
-          <TeamOverview
+        ) : (
+          <AccountDashboard
             account={activeAccount}
             nowTs={nowTs}
-            onSelectCategory={(group) => {
-              setInventoryGroup(group);
-              setActiveTab('inventory');
-            }}
-            onGoDrops={() => setActiveTab('drops')}
-          />
-        ) : activeTab === 'inventory' ? (
-          <InventoryView
-            account={activeAccount}
-            initialGroup={inventoryGroup}
-            onGroupChange={setInventoryGroup}
-          />
-        ) : (
-          <DropsView
-            account={activeAccount}
+            syncKey={syncKey}
+            apiBase={activeApiBase}
+            storageLabel={storageShortLabel}
             isReadOnly={Boolean(shareId)}
+            activeTab={activeTab === 'sync' ? 'drops' : activeTab}
+            onTabChange={(tab) => setActiveTab(tab)}
+            onOpenSync={shareId ? undefined : () => setActiveTab('sync')}
+            onOpenShare={shareId ? undefined : () => setShareModalOpen(true)}
             onClearDrops={handleClearDrops}
           />
         )}

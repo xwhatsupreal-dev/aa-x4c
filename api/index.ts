@@ -1478,6 +1478,39 @@ export default async function handler(req: Req, res: ServerResponse) {
     return;
   }
 
+  // Proxy Roblox 3D full-body avatar thumbnail URL for the account profile stage
+  const avatarMatch = pathname.match(/^\/api\/avatar\/(\d{1,15})$/);
+  if (req.method === 'GET' && avatarMatch) {
+    const userId = avatarMatch[1];
+    try {
+      const upstream = await fetch(
+        `https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`,
+        { headers: { Accept: 'application/json' } }
+      );
+      if (!upstream.ok) {
+        sendJson(res, { ok: false, imageUrl: null }, 200);
+        return;
+      }
+      const data = (await upstream.json()) as {
+        data?: Array<{ state?: string; imageUrl?: string }>;
+      };
+      const entry = data?.data?.[0];
+      const imageUrl =
+        entry?.state === 'Completed' && typeof entry.imageUrl === 'string' && entry.imageUrl
+          ? entry.imageUrl
+          : null;
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'public, max-age=600',
+        ...CORS_HEADERS,
+      });
+      res.end(JSON.stringify({ ok: Boolean(imageUrl), imageUrl }));
+    } catch {
+      sendJson(res, { ok: false, imageUrl: null }, 200);
+    }
+    return;
+  }
+
   // Optional transparent proxy to Cloudflare Worker if set in Vercel Environment Variables
   const workerProxyBase = (
     process.env.CLOUDFLARE_WORKER_URL || process.env.VITE_CLOUDFLARE_WORKER_URL || ''
