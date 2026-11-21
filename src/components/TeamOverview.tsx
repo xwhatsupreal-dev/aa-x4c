@@ -3,6 +3,7 @@ import { ArrowRight, ChevronRight } from 'lucide-react';
 import {
   formatNumber,
   formatRelativeTime,
+  isAccountOnline,
   RARITY_META,
 } from '../data/aaCatalog.ts';
 import type { AccountSnapshot, TeamUnit } from '../types.ts';
@@ -10,16 +11,19 @@ import { ItemEmblem } from './ItemEmblem.tsx';
 
 interface TeamOverviewProps {
   account: AccountSnapshot;
+  nowTs?: number;
   onSelectCategory: (group: string) => void;
   onGoDrops: () => void;
 }
 
 export function TeamOverview({
   account,
+  nowTs = Date.now(),
   onSelectCategory,
   onGoDrops,
 }: TeamOverviewProps) {
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
+  const online = isAccountOnline(account.lastSyncedAt, nowTs);
 
   // Build fixed 6 slots matching Anime Adventures team structure
   const slots: Array<{ slot: number; unit: TeamUnit | null }> = Array.from(
@@ -65,8 +69,14 @@ export function TeamOverview({
           <h1 className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight text-slate-50 text-balance">
             {account.displayName}
           </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            @{account.username} · ซิงค์จากสคริปต์ล่าสุด {formatRelativeTime(account.lastSyncedAt)}
+          <p className="mt-1 text-sm text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span>@{account.username}</span>
+            <span className="text-slate-600">·</span>
+            <span className={online ? 'text-emerald-400' : 'text-slate-400'}>
+              {online ? 'ออนไลน์' : 'ออฟไลน์ (บันทึกข้อมูลล่าสุดไว้)'}
+            </span>
+            <span className="text-slate-600">·</span>
+            <span>อัปเดตล่าสุด {formatRelativeTime(account.lastSyncedAt, nowTs)}</span>
           </p>
         </div>
       </div>
@@ -348,7 +358,7 @@ export function TeamOverview({
 
           {account.rewards.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-500">
-              ยังไม่มีประวัติของที่ดรอป — เล่นจบด่านหรือกดจำลองดรอปในหน้าประวัติ
+              ยังไม่มีประวัติของที่ดรอป — เมื่อเล่นจบด่านในเกม ระบบจะบันทึกของที่ได้ให้อัตโนมัติ
             </div>
           ) : (
             <ul className="divide-y divide-white/[0.06]">

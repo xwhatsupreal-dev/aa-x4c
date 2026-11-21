@@ -112,8 +112,8 @@ export function formatClock(ts: number): string {
   });
 }
 
-export function formatRelativeTime(ts: number): string {
-  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+export function formatRelativeTime(ts: number, now = Date.now()): string {
+  const diffSec = Math.max(0, Math.floor((now - ts) / 1000));
   if (diffSec < 15) return 'เมื่อสักครู่';
   if (diffSec < 60) return `${diffSec} วินาทีที่แล้ว`;
   const diffMin = Math.floor(diffSec / 60);
@@ -121,4 +121,10 @@ export function formatRelativeTime(ts: number): string {
   const diffHr = Math.floor(diffMin / 60);
   if (diffHr < 24) return `${diffHr} ชั่วโมงที่แล้ว`;
   return `${Math.floor(diffHr / 24)} วันที่แล้ว`;
+}
+
+export const ONLINE_THRESHOLD_MS = 65_000;
+
+export function isAccountOnline(lastSyncedAt: number, now = Date.now()): boolean {
+  return now - lastSyncedAt <= ONLINE_THRESHOLD_MS;
 }

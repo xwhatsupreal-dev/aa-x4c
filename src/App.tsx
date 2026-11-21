@@ -9,7 +9,12 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { formatCompact, RARITY_META } from './data/aaCatalog.ts';
+import {
+  formatCompact,
+  formatRelativeTime,
+  isAccountOnline,
+  RARITY_META,
+} from './data/aaCatalog.ts';
 import type { AccountSnapshot, RewardEntry, SyncPayload } from './types.ts';
 import { DropsView } from './components/DropsView.tsx';
 import { InventoryView } from './components/InventoryView.tsx';
@@ -91,6 +96,12 @@ export default function App() {
   const [liveConnected, setLiveConnected] = useState(false);
   const [backendProvider, setBackendProvider] = useState<string>('');
   const [isServerlessBackend, setIsServerlessBackend] = useState<boolean>(false);
+  const [nowTs, setNowTs] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTs(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const toastTimeouts = useRef<number[]>([]);
   const hasAutoSwitchedToSync = useRef(false);
@@ -564,20 +575,26 @@ export default function App() {
 
       {/* Synced Accounts Switcher */}
       <div className="px-3 pt-4 pb-3 flex-1 overflow-y-auto border-t border-white/[0.07]">
-        <div className="px-3 pb-2 flex items-center justify-between">
+        <div className="px-3 pb-2 flex items-center justify-between gap-2">
           <span className="text-xs font-medium text-slate-500">
-            {shareId ? 'บัญชีที่แชร์' : `บัญชีที่ออนไลน์ (${accounts.length})`}
+            {shareId ? 'บัญชีที่แชร์' : `บัญชีที่บันทึกไว้ (${accounts.length})`}
           </span>
+          {!shareId && accounts.length > 0 && (
+            <span className="text-[11px] font-mono tabular-nums text-emerald-400/90">
+              ออนไลน์ {accounts.filter((a) => isAccountOnline(a.lastSyncedAt, nowTs)).length}
+            </span>
+          )}
         </div>
 
         {accounts.length === 0 ? (
           <div className="px-3 py-4 text-xs text-slate-500 leading-relaxed">
-            กำลังรอข้อมูลจากสคริปต์ในเกม — รันสคริปต์แล้วบัญชีจะขึ้นมาอัตโนมัติ
+            กำลังรอข้อมูลจากสคริปต์ในเกม — รันสคริปต์แล้วบัญชีจะขึ้นมาและบันทึกค้างไว้ให้อัตโนมัติ
           </div>
         ) : (
           <ul className="space-y-1">
             {accounts.map((acc) => {
               const selected = activeAccount?.accountId === acc.accountId;
+              const online = isAccountOnline(acc.lastSyncedAt, nowTs);
               return (
                 <li key={acc.accountId} className="group relative">
                   <button
@@ -593,9 +610,24 @@ export default function App() {
                         : 'text-slate-400 hover:bg-white/[0.035] hover:text-slate-200'
                     }`}
                   >
-                    <p className="text-sm font-medium truncate pr-6">{acc.displayName}</p>
-                    <p className="mt-0.5 text-[11px] font-mono tabular-nums text-slate-500 truncate">
+                    <div className="flex items-center gap-2 pr-6 min-w-0">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          online ? 'bg-emerald-400' : 'bg-slate-600'
+                        }`}
+                        title={online ? 'กำลังออนไลน์' : 'ออฟไลน์'}
+                      />
+                      <p className="text-sm font-medium truncate">{acc.displayName}</p>
+                    </div>
+                    <p className="mt-0.5 pl-3.5 text-[11px] font-mono tabular-nums text-slate-500 truncate">
                       {formatCompact(acc.gems)} Gems · {formatCompact(acc.gold)} Gold
+                    </p>
+                    <p
+                      className={`mt-0.5 pl-3.5 text-[11px] truncate ${
+                        online ? 'text-emerald-400/85' : 'text-slate-500'
+                      }`}
+                    >
+                      {online ? 'ออนไลน์' : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
                     </p>
                   </button>
 
@@ -799,6 +831,7 @@ export default function App() {
           ) : activeTab === 'overview' ? (
             <TeamOverview
               account={activeAccount}
+              nowTs={nowTs}
               onSelectCategory={(group) => {
                 setInventoryGroup(group);
                 setActiveTab('inventory');
