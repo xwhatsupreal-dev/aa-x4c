@@ -197,8 +197,8 @@ interface SyncPayload {
 
 type Req = IncomingMessage & { body?: unknown };
 
-const SCRIPT_VERSION = '2.5.0';
-const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 17:45 น. (เวลาไทย)';
+const SCRIPT_VERSION = '2.5.1';
+const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 22:45 น. (เวลาไทย)';
 
 const RARITY_ORDER: Rarity[] = [
   'Secret',
@@ -494,6 +494,21 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
   };
 }
 
+const ALLOWED_RBX_CDN_RE = /^https:\/\/([a-z0-9-]+\.)?rbxcdn\.com\//i;
+const BLOCKED_RBX_PLACEHOLDER_RE =
+  /180DAY-(?:e5bef3179d5ce82a42fdc8ddc83a2ba9|a53354b1f60a5dedc00d0600d1491075)/i;
+const ALLOWED_WIKI_IMAGE_RE =
+  /^https:\/\/static\.wikia\.nocookie\.net\/animeadventures\/images\//i;
+const BAD_WIKI_FILENAME_RE =
+  /(?:^|\/)(?:Unknown|Placeholder|Site-logo|Wiki-wordmark|Damage_type_|No_image)/i;
+const WIKI_API = 'https://animeadventures.fandom.com/api.php';
+
+function isAllowedAaImageUrl(raw: string): boolean {
+  if (ALLOWED_WIKI_IMAGE_RE.test(raw)) return true;
+  if (ALLOWED_RBX_CDN_RE.test(raw) && !BLOCKED_RBX_PLACEHOLDER_RE.test(raw)) return true;
+  return false;
+}
+
 const assetThumbCache = new Map<string, { url: string | null; exp: number }>();
 
 async function resolveRobloxAssetThumb(assetId: string): Promise<string | null> {
@@ -503,13 +518,14 @@ async function resolveRobloxAssetThumb(assetId: string): Promise<string | null> 
   for (const size of ['420x420', '150x150']) {
     try {
       const res = await fetch(
-        `https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&returnPolicy=PlaceHolder&size=${size}&format=Png&isCircular=false`,
+        `https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&size=${size}&format=Png&isCircular=false`,
         { headers: { Accept: 'application/json' } }
       );
       if (!res.ok) continue;
       const data = (await res.json()) as { data?: Array<{ state?: string; imageUrl?: string }> };
-      const url = data?.data?.[0]?.imageUrl;
-      if (url && /^https:\/\/([a-z0-9-]+\.)?rbxcdn\.com\//i.test(url)) {
+      const entry = data?.data?.[0];
+      const url = entry?.state === 'Completed' ? entry.imageUrl : undefined;
+      if (url && ALLOWED_RBX_CDN_RE.test(url) && !BLOCKED_RBX_PLACEHOLDER_RE.test(url)) {
         assetThumbCache.set(assetId, { url, exp: now + 60 * 60 * 1000 });
         return url;
       }
@@ -519,6 +535,271 @@ async function resolveRobloxAssetThumb(assetId: string): Promise<string | null> 
   }
   assetThumbCache.set(assetId, { url: null, exp: now + 5 * 60 * 1000 });
   return null;
+}
+
+type AaImageKind = 'stage' | 'unit' | 'item' | 'currency';
+const aaImageCache = new Map<string, { url: string | null; exp: number }>();
+
+const CURRENCY_FILE_MAP: Record<string, string[]> = {
+  gold: ['File:Gold.png'],
+  gems: ['File:Gems.png'],
+  gem: ['File:Gems.png'],
+  first_clear_gems: ['File:Gems.png'],
+  trophies: ['File:Trophies.png'],
+  trophy: ['File:Trophies.png'],
+  trait_tokens: ['File:Star Remnant.png', 'File:Remnant.png'],
+  trait_reroll: ['File:Star Remnant.png', 'File:Remnant.png'],
+  curse_tokens: ['File:Cursed Womb.png', 'File:Curse Token.png'],
+  rebirth_tokens: ['File:Rebirth Token.png'],
+  resource: ['File:Holiday Stars.png', 'File:Candies.png', 'File:Pearls.png'],
+};
+
+function stripParens(name: string): string {
+  return name.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function titleCaseFromId(rawId: string): string {
+  const base = rawId
+    .replace(/_(evolved|evo|shiny|alt|v2|portal|raid|stage|unit|skin)$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  if (!base) return '';
+  return base.replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
+}
+
+function uniqueStrings(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const t = item.trim();
+    if (!t) continue;
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
+}
+
+function normalizeMatchTokens(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/^file:/, '')
+    .replace(/\.(png|jpg|jpeg|webp|gif)$/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && w !== 'map' && w !== 'pose' && w !== 'icon');
+}
+
+function isGoodWikiImageUrl(url: unknown): url is string {
+  return (
+    typeof url === 'string' &&
+    ALLOWED_WIKI_IMAGE_RE.test(url) &&
+    !BAD_WIKI_FILENAME_RE.test(url) &&
+    !/\.svg(?:\/|\?|$)/i.test(url)
+  );
+}
+
+async function fetchWikiJson(params: Record<string, string>): Promise<Record<string, unknown> | null> {
+  try {
+    const qs = new URLSearchParams({ action: 'query', format: 'json', ...params });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${WIKI_API}?${qs.toString()}`, {
+      headers: { Accept: 'application/json', 'User-Agent': 'AAVault/2.5' },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+async function queryWikiFiles(fileTitles: string[], width = 256): Promise<string | null> {
+  const titles = uniqueStrings(fileTitles).slice(0, 12);
+  if (titles.length === 0) return null;
+  const data = await fetchWikiJson({
+    titles: titles.join('|'),
+    prop: 'imageinfo',
+    iiprop: 'url',
+    iiurlwidth: String(width),
+    redirects: '1',
+  });
+  const query = data?.query as
+    | {
+        pages?: Record<
+          string,
+          { title?: string; missing?: string; imageinfo?: Array<{ thumburl?: string; url?: string }> }
+        >;
+      }
+    | undefined;
+  const byTitle = new Map<string, string>();
+  for (const p of Object.values(query?.pages || {})) {
+    if (!p || p.missing !== undefined) continue;
+    const url = p.imageinfo?.[0]?.thumburl || p.imageinfo?.[0]?.url;
+    if (p.title && isGoodWikiImageUrl(url)) byTitle.set(p.title.toLowerCase(), url);
+  }
+  for (const c of titles) {
+    const hit = byTitle.get(c.toLowerCase());
+    if (hit) return hit;
+  }
+  return byTitle.values().next().value || null;
+}
+
+async function queryWikiPageImages(pageTitles: string[], width = 256): Promise<string | null> {
+  const titles = uniqueStrings(pageTitles).slice(0, 8);
+  if (titles.length === 0) return null;
+  const data = await fetchWikiJson({
+    titles: titles.join('|'),
+    prop: 'pageimages',
+    piprop: 'thumbnail|original',
+    pithumbsize: String(width),
+    redirects: '1',
+  });
+  const query = data?.query as
+    | {
+        pages?: Record<
+          string,
+          {
+            title?: string;
+            missing?: string;
+            thumbnail?: { source?: string };
+            original?: { source?: string };
+          }
+        >;
+      }
+    | undefined;
+  const byTitle = new Map<string, string>();
+  for (const p of Object.values(query?.pages || {})) {
+    if (!p || p.missing !== undefined) continue;
+    const url = p.thumbnail?.source || p.original?.source;
+    if (p.title && isGoodWikiImageUrl(url)) byTitle.set(p.title.toLowerCase(), url);
+  }
+  for (const c of titles) {
+    const hit = byTitle.get(c.toLowerCase());
+    if (hit) return hit;
+  }
+  return byTitle.values().next().value || null;
+}
+
+async function searchWikiFileStrict(searchText: string, width = 256): Promise<string | null> {
+  const targetTokens = normalizeMatchTokens(searchText);
+  if (targetTokens.length === 0) return null;
+  const data = await fetchWikiJson({
+    generator: 'search',
+    gsrsearch: searchText,
+    gsrnamespace: '6',
+    gsrlimit: '4',
+    prop: 'imageinfo',
+    iiprop: 'url',
+    iiurlwidth: String(width),
+  });
+  const query = data?.query as
+    | {
+        pages?: Record<
+          string,
+          { index?: number; title?: string; imageinfo?: Array<{ thumburl?: string; url?: string }> }
+        >;
+      }
+    | undefined;
+  const pages = Object.values(query?.pages || {}).sort((a, b) => (a.index ?? 99) - (b.index ?? 99));
+  for (const p of pages) {
+    const url = p.imageinfo?.[0]?.thumburl || p.imageinfo?.[0]?.url;
+    if (!p.title || !isGoodWikiImageUrl(url) || /\.gif(?:\/|\?|$)/i.test(url)) continue;
+    const fileTokens = normalizeMatchTokens(p.title);
+    const matched = targetTokens.filter((t) => fileTokens.includes(t)).length;
+    if (matched >= targetTokens.length || (targetTokens.length >= 2 && matched >= targetTokens.length - 1)) {
+      return url;
+    }
+  }
+  return null;
+}
+
+async function resolveAaImageUrl(opts: {
+  kind: AaImageKind;
+  name: string;
+  id: string;
+  world: string;
+  map: string;
+  assetId: string;
+}): Promise<string | null> {
+  const { kind, name, id, world, map, assetId } = opts;
+  const cacheKey = `${kind}|${name.toLowerCase()}|${id.toLowerCase()}|${world.toLowerCase()}|${map.toLowerCase()}|${assetId}`;
+  const now = Date.now();
+  const cached = aaImageCache.get(cacheKey);
+  if (cached && cached.exp > now) return cached.url;
+
+  let resolved: string | null = null;
+  if (assetId && /^\d{4,15}$/.test(assetId)) {
+    resolved = await resolveRobloxAssetThumb(assetId);
+  }
+
+  if (!resolved) {
+    const baseName = stripParens(name);
+    const idTitle = titleCaseFromId(id);
+
+    if (kind === 'currency') {
+      const lowerId = id.toLowerCase();
+      const lowerName = name.toLowerCase();
+      const preset =
+        CURRENCY_FILE_MAP[lowerId] ||
+        CURRENCY_FILE_MAP[lowerName] ||
+        (lowerName.includes('gem')
+          ? ['File:Gems.png']
+          : lowerName.includes('gold')
+            ? ['File:Gold.png']
+            : lowerName.includes('trophy')
+              ? ['File:Trophies.png']
+              : lowerName.includes('trait') || lowerName.includes('remnant')
+                ? ['File:Star Remnant.png']
+                : []);
+      const candidates = uniqueStrings([
+        ...preset,
+        ...(name ? [`File:${name}.png`] : []),
+        ...(baseName ? [`File:${baseName}.png`] : []),
+      ]);
+      resolved = await queryWikiFiles(candidates, 160);
+    } else if (kind === 'stage') {
+      const mapTitle = titleCaseFromId(map);
+      const stageNames = uniqueStrings([name, baseName, world, mapTitle]).filter(
+        (s) => s.toLowerCase() !== 'lobby' && s !== 'ล็อบบี้'
+      );
+      const fileCandidates = uniqueStrings(
+        stageNames.flatMap((s) => [`File:Map - ${s}.png`, `File:${s} UOThumbnail.png`, `File:${s}.png`])
+      );
+      resolved = await queryWikiFiles(fileCandidates, 320);
+      if (!resolved && stageNames.length > 0) {
+        resolved = await searchWikiFileStrict(`Map ${stageNames[0]}`, 320);
+      }
+    } else if (kind === 'unit') {
+      const pageCandidates = uniqueStrings([name, baseName, idTitle]);
+      resolved = await queryWikiPageImages(pageCandidates, 256);
+      if (!resolved) {
+        const fileCandidates = uniqueStrings(
+          pageCandidates.flatMap((s) => [`File:${s}.png`, `File:${s} (Pose).png`])
+        );
+        resolved = await queryWikiFiles(fileCandidates, 256);
+      }
+    } else {
+      const itemNames = uniqueStrings([name, baseName, idTitle]);
+      const fileCandidates = uniqueStrings(
+        itemNames.flatMap((s) => [`File:${s}.png`, `File:${s}.webp`])
+      );
+      resolved = await queryWikiFiles(fileCandidates, 220);
+      if (!resolved && name) resolved = await searchWikiFileStrict(name, 220);
+      if (!resolved && baseName && baseName !== name) resolved = await searchWikiFileStrict(baseName, 220);
+    }
+  }
+
+  const finalUrl = resolved && isAllowedAaImageUrl(resolved) ? resolved : null;
+  aaImageCache.set(cacheKey, {
+    url: finalUrl,
+    exp: now + (finalUrl ? 24 * 3600_000 : 30 * 60_000),
+  });
+  return finalUrl;
 }
 
 async function readBodyText(req: Req): Promise<string> {
@@ -1389,6 +1670,15 @@ local function imgOf(root, path)
 	if i and (i:IsA("ImageLabel") or i:IsA("ImageButton")) and i.Image ~= "" then return i.Image end
 	return nil
 end
+local function isGuiVisible(inst, stopAt)
+	if not inst then return false end
+	local cur = inst
+	while cur and cur ~= stopAt do
+		if cur:IsA("GuiObject") and cur.Visible == false then return false end
+		cur = cur.Parent
+	end
+	return true
+end
 
 local httpRequest =
 	(type(request) == "function" and request)
@@ -1553,14 +1843,21 @@ function Hub.SnapStats()
 		if not t.gem_amount and type(rawget(p, "gem_amount")) == "number" then t.gem_amount = rawget(p, "gem_amount") end
 	end
 	Hub.CurrentStats = t
-	local lvTxt = txt(PG:FindFirstChild("spawn_units"), "Main.Desc.Level")
-	local lvNum = parseQty(lvTxt)
-	if lvNum > 0 then
-		Hub.PlayerLevel = lvNum
-	elseif p then
-		local plv = safeNum(rawget(p, "level") or rawget(p, "player_level"))
-		if plv > 0 then Hub.PlayerLevel = plv end
+	local lvNum = parseQty(txt(PG:FindFirstChild("spawn_units"), "Main.Desc.Level"))
+	if lvNum <= 0 then
+		lvNum = safeNum(t.player_level or t.level or t.Level)
 	end
+	if lvNum <= 0 then
+		local ls = LP:FindFirstChild("leaderstats")
+		if ls then
+			local lvObj = ls:FindFirstChild("Level") or ls:FindFirstChild("Lvl") or ls:FindFirstChild("level")
+			if lvObj and lvObj:IsA("ValueBase") then lvNum = parseQty(lvObj.Value) end
+		end
+	end
+	if lvNum <= 0 and p then
+		lvNum = safeNum(rawget(p, "level") or rawget(p, "player_level"))
+	end
+	if lvNum > 0 then Hub.PlayerLevel = math.floor(lvNum) end
 	return t
 end
 
@@ -1643,8 +1940,8 @@ function Hub.ReadTeam()
 		if type(u) ~= "table" then return end
 		local uid = tostring(u.unit_id or u.id or "")
 		if uid == "" then return end
-		local lv = safeNum(u.level or u.ingame_level)
-		if type(ingLv) == "table" and type(ingLv[uuid]) == "number" then
+		local lv = safeNum(u.level or u._level or u.xp_level)
+		if lv <= 0 and type(ingLv) == "table" and type(ingLv[uuid]) == "number" then
 			lv = math.floor(ingLv[uuid])
 		end
 		if lv <= 0 then lv = 1 end
@@ -1937,7 +2234,7 @@ local function buildPayloadJson()
 		userId = LP.UserId,
 		gold = safeNum(stats.gold_amount),
 		gems = safeNum(stats.gem_amount),
-		level = Hub.PlayerLevel,
+		level = (Hub.PlayerLevel and Hub.PlayerLevel > 0) and Hub.PlayerLevel or nil,
 		extraStats = {
 			playerXp = safeNum(stats.player_xp),
 			resource = safeNum(stats.resource),
@@ -2200,28 +2497,33 @@ local function flushStageClearRewards(triggerSource)
 				bundle[#bundle + 1] = entry
 			end
 
-			-- 1) ดึงรางวัลจากหน้าต่าง ResultsUI
-			if g and g.Enabled then
-				for _, f in ipairs(RESULT_FIELDS) do
-					local rawVal = txt(g, f.path)
-					local q = parseQty(rawVal)
-					if q > 0 then
-						local icon = imgOf(g, f.imgPath) or (f.res and RES_ICON[f.res] or nil)
-						addBundle("currency", f.id, f.name, f.rarity, q, icon)
-					end
-				end
-			end
-
-			-- 2) เทียบค่า _stats เพิ่มเติม (Trait/Curse/Rebirth Token ฯลฯ ที่อาจไม่แสดงบน ResultsUI)
+			-- 1) เทียบค่า _stats จริงตั้งแต่เริ่มด่าน -> จบด่าน (แม่นยำที่สุด ไม่มีค่าหลอก 99999)
 			local nowStats = Hub.SnapStats()
 			local oldStats = Hub.StageStartStats
+			local statsDeltaById = {}
 			if type(oldStats) == "table" then
 				for key, meta in pairs(STAT_KEYS) do
 					local o, n = oldStats[key], nowStats[key]
 					if type(o) == "number" and type(n) == "number" and n > o then
 						local d = math.floor(n - o)
 						if d >= 1 then
+							statsDeltaById[meta.id] = d
 							addBundle("currency", meta.id, meta.name, meta.rarity, d, meta.res and RES_ICON[meta.res] or nil)
+						end
+					end
+				end
+			end
+
+			-- 2) ดึงรางวัลจากหน้าต่าง ResultsUI เฉพาะช่องที่ Visible จริง และไม่เป็นค่าหลอกเทมเพลต 99999
+			if g and g.Enabled then
+				for _, f in ipairs(RESULT_FIELDS) do
+					local lbl = idx(g, f.path)
+					if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and isGuiVisible(lbl, g) then
+						local q = parseQty(lbl.Text)
+						local isTemplateFake = (q == 99999 or q == 999999) and (statsDeltaById[f.id] or 0) < 50000
+						if q > 0 and not isTemplateFake and not statsDeltaById[f.id] then
+							local icon = imgOf(g, f.imgPath) or (f.res and RES_ICON[f.res] or nil)
+							addBundle("currency", f.id, f.name, f.rarity, q, icon)
 						end
 					end
 				end
@@ -2709,7 +3011,7 @@ export default async function handler(req: Req, res: ServerResponse) {
     return;
   }
 
-  // Same-origin Roblox asset thumbnail proxy (stage MapIcons + item/resource icons)
+  // Same-origin Roblox asset thumbnail proxy (rejects private Roblox blocked placeholders)
   if (req.method === 'GET' && pathname === '/api/asset-image') {
     const rawId = (parsedUrl.searchParams.get('id') || '').trim();
     if (!/^\d{4,15}$/.test(rawId)) {
@@ -2719,8 +3021,8 @@ export default async function handler(req: Req, res: ServerResponse) {
     }
     try {
       const imageUrl = await resolveRobloxAssetThumb(rawId);
-      if (!imageUrl || !/^https:\/\/([a-z0-9-]+\.)?rbxcdn\.com\//i.test(imageUrl)) {
-        res.writeHead(404, CORS_HEADERS);
+      if (!imageUrl || !ALLOWED_RBX_CDN_RE.test(imageUrl) || BLOCKED_RBX_PLACEHOLDER_RE.test(imageUrl)) {
+        res.writeHead(404, { 'Cache-Control': 'public, max-age=1800', ...CORS_HEADERS });
         res.end();
         return;
       }
@@ -2733,7 +3035,59 @@ export default async function handler(req: Req, res: ServerResponse) {
       const buf = Buffer.from(await upstream.arrayBuffer());
       res.writeHead(200, {
         'Content-Type': upstream.headers.get('content-type') || 'image/png',
-        'Cache-Control': 'public, max-age=86400',
+        'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+        ...CORS_HEADERS,
+      });
+      res.end(buf);
+    } catch {
+      res.writeHead(502, CORS_HEADERS);
+      res.end();
+    }
+    return;
+  }
+
+  // Same-origin Anime Adventures artwork proxy (public Roblox thumb -> official AA Wiki artwork)
+  if (req.method === 'GET' && pathname === '/api/aa-image') {
+    const rawKind = (parsedUrl.searchParams.get('kind') || 'item').trim().toLowerCase();
+    const kind: AaImageKind =
+      rawKind === 'stage' || rawKind === 'unit' || rawKind === 'currency' || rawKind === 'item'
+        ? rawKind
+        : 'item';
+    const name = (parsedUrl.searchParams.get('name') || '').trim().slice(0, 96);
+    const id = (parsedUrl.searchParams.get('id') || '').trim().slice(0, 64);
+    const world = (parsedUrl.searchParams.get('world') || '').trim().slice(0, 64);
+    const map = (parsedUrl.searchParams.get('map') || '').trim().slice(0, 64);
+    const assetId = (parsedUrl.searchParams.get('assetId') || '').trim().slice(0, 24);
+
+    if (!name && !id && !world && !map && !assetId) {
+      res.writeHead(400, CORS_HEADERS);
+      res.end('Missing image query');
+      return;
+    }
+
+    try {
+      const imageUrl = await resolveAaImageUrl({ kind, name, id, world, map, assetId });
+      if (!imageUrl || !isAllowedAaImageUrl(imageUrl)) {
+        res.writeHead(404, { 'Cache-Control': 'public, max-age=1800', ...CORS_HEADERS });
+        res.end();
+        return;
+      }
+      const upstream = await fetch(imageUrl, { headers: { 'User-Agent': 'AAVault/2.5' } });
+      if (!upstream.ok) {
+        res.writeHead(404, { 'Cache-Control': 'public, max-age=600', ...CORS_HEADERS });
+        res.end();
+        return;
+      }
+      const ct = upstream.headers.get('content-type') || 'image/png';
+      if (!/^image\//i.test(ct) || /svg/i.test(ct)) {
+        res.writeHead(404, CORS_HEADERS);
+        res.end();
+        return;
+      }
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.writeHead(200, {
+        'Content-Type': ct,
+        'Cache-Control': 'public, max-age=86400, s-maxage=86400',
         ...CORS_HEADERS,
       });
       res.end(buf);

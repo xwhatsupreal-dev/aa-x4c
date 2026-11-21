@@ -11,8 +11,14 @@ import {
 } from './src/data/aaCatalog.ts';
 import { generateWebSyncLuaScript } from './src/utils/luaGenerator.ts';
 import {
+  isAllowedAaImageUrl,
+  resolveAaImageUrl,
+  type AaImageKind,
+} from './src/utils/aaImageResolver.ts';
+import {
   fetchRobloxAvatarInfo,
   isAllowedRobloxCdnUrl,
+  isBlockedRobloxPlaceholderUrl,
   resolveRobloxAssetImageUrl,
 } from './src/utils/robloxAvatar.ts';
 import type {
@@ -383,7 +389,7 @@ async function startServer() {
     }
   });
 
-  // Same-origin Roblox asset thumbnail proxy (stage MapIcons + item/resource icons)
+  // Same-origin Roblox asset thumbnail proxy (rejects private Roblox blocked placeholders)
   app.get('/api/asset-image', async (req, res) => {
     const rawId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
     if (!/^\d{4,15}$/.test(rawId)) {
@@ -392,7 +398,8 @@ async function startServer() {
     }
     try {
       const imageUrl = await resolveRobloxAssetImageUrl(rawId);
-      if (!imageUrl || !isAllowedRobloxCdnUrl(imageUrl)) {
+      if (!imageUrl || !isAllowedRobloxCdnUrl(imageUrl) || isBlockedRobloxPlaceholderUrl(imageUrl)) {
+        res.setHeader('Cache-Control', 'public, max-age=1800');
         res.status(404).end();
         return;
       }
@@ -403,6 +410,53 @@ async function startServer() {
       }
       const buf = Buffer.from(await upstream.arrayBuffer());
       res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(buf);
+    } catch {
+      res.status(502).end();
+    }
+  });
+
+  // Same-origin Anime Adventures artwork proxy (public Roblox thumb -> official AA Wiki artwork)
+  app.get('/api/aa-image', async (req, res) => {
+    const rawKind = typeof req.query.kind === 'string' ? req.query.kind.trim().toLowerCase() : 'item';
+    const kind: AaImageKind =
+      rawKind === 'stage' || rawKind === 'unit' || rawKind === 'currency' || rawKind === 'item'
+        ? rawKind
+        : 'item';
+    const name = typeof req.query.name === 'string' ? req.query.name.trim().slice(0, 96) : '';
+    const id = typeof req.query.id === 'string' ? req.query.id.trim().slice(0, 64) : '';
+    const world = typeof req.query.world === 'string' ? req.query.world.trim().slice(0, 64) : '';
+    const map = typeof req.query.map === 'string' ? req.query.map.trim().slice(0, 64) : '';
+    const assetId = typeof req.query.assetId === 'string' ? req.query.assetId.trim().slice(0, 24) : '';
+
+    if (!name && !id && !world && !map && !assetId) {
+      res.status(400).end('Missing image query');
+      return;
+    }
+
+    try {
+      const imageUrl = await resolveAaImageUrl({ kind, name, id, world, map, assetId });
+      if (!imageUrl || !isAllowedAaImageUrl(imageUrl)) {
+        res.setHeader('Cache-Control', 'public, max-age=1800');
+        res.status(404).end();
+        return;
+      }
+      const upstream = await fetch(imageUrl, {
+        headers: { 'User-Agent': 'AAVault/2.5' },
+      });
+      if (!upstream.ok) {
+        res.setHeader('Cache-Control', 'public, max-age=600');
+        res.status(404).end();
+        return;
+      }
+      const ct = upstream.headers.get('content-type') || 'image/png';
+      if (!/^image\//i.test(ct) || /svg/i.test(ct)) {
+        res.status(404).end();
+        return;
+      }
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader('Content-Type', ct);
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.send(buf);
     } catch {

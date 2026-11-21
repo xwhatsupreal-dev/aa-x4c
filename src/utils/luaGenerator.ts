@@ -726,6 +726,15 @@ local function imgOf(root, path)
 	if i and (i:IsA("ImageLabel") or i:IsA("ImageButton")) and i.Image ~= "" then return i.Image end
 	return nil
 end
+local function isGuiVisible(inst, stopAt)
+	if not inst then return false end
+	local cur = inst
+	while cur and cur ~= stopAt do
+		if cur:IsA("GuiObject") and cur.Visible == false then return false end
+		cur = cur.Parent
+	end
+	return true
+end
 
 local httpRequest =
 	(type(request) == "function" and request)
@@ -890,14 +899,21 @@ function Hub.SnapStats()
 		if not t.gem_amount and type(rawget(p, "gem_amount")) == "number" then t.gem_amount = rawget(p, "gem_amount") end
 	end
 	Hub.CurrentStats = t
-	local lvTxt = txt(PG:FindFirstChild("spawn_units"), "Main.Desc.Level")
-	local lvNum = parseQty(lvTxt)
-	if lvNum > 0 then
-		Hub.PlayerLevel = lvNum
-	elseif p then
-		local plv = safeNum(rawget(p, "level") or rawget(p, "player_level"))
-		if plv > 0 then Hub.PlayerLevel = plv end
+	local lvNum = parseQty(txt(PG:FindFirstChild("spawn_units"), "Main.Desc.Level"))
+	if lvNum <= 0 then
+		lvNum = safeNum(t.player_level or t.level or t.Level)
 	end
+	if lvNum <= 0 then
+		local ls = LP:FindFirstChild("leaderstats")
+		if ls then
+			local lvObj = ls:FindFirstChild("Level") or ls:FindFirstChild("Lvl") or ls:FindFirstChild("level")
+			if lvObj and lvObj:IsA("ValueBase") then lvNum = parseQty(lvObj.Value) end
+		end
+	end
+	if lvNum <= 0 and p then
+		lvNum = safeNum(rawget(p, "level") or rawget(p, "player_level"))
+	end
+	if lvNum > 0 then Hub.PlayerLevel = math.floor(lvNum) end
 	return t
 end
 
@@ -980,8 +996,8 @@ function Hub.ReadTeam()
 		if type(u) ~= "table" then return end
 		local uid = tostring(u.unit_id or u.id or "")
 		if uid == "" then return end
-		local lv = safeNum(u.level or u.ingame_level)
-		if type(ingLv) == "table" and type(ingLv[uuid]) == "number" then
+		local lv = safeNum(u.level or u._level or u.xp_level)
+		if lv <= 0 and type(ingLv) == "table" and type(ingLv[uuid]) == "number" then
 			lv = math.floor(ingLv[uuid])
 		end
 		if lv <= 0 then lv = 1 end
@@ -1274,7 +1290,7 @@ local function buildPayloadJson()
 		userId = LP.UserId,
 		gold = safeNum(stats.gold_amount),
 		gems = safeNum(stats.gem_amount),
-		level = Hub.PlayerLevel,
+		level = (Hub.PlayerLevel and Hub.PlayerLevel > 0) and Hub.PlayerLevel or nil,
 		extraStats = {
 			playerXp = safeNum(stats.player_xp),
 			resource = safeNum(stats.resource),
@@ -1537,28 +1553,33 @@ local function flushStageClearRewards(triggerSource)
 				bundle[#bundle + 1] = entry
 			end
 
-			-- 1) ดึงรางวัลจากหน้าต่าง ResultsUI
-			if g and g.Enabled then
-				for _, f in ipairs(RESULT_FIELDS) do
-					local rawVal = txt(g, f.path)
-					local q = parseQty(rawVal)
-					if q > 0 then
-						local icon = imgOf(g, f.imgPath) or (f.res and RES_ICON[f.res] or nil)
-						addBundle("currency", f.id, f.name, f.rarity, q, icon)
-					end
-				end
-			end
-
-			-- 2) เทียบค่า _stats เพิ่มเติม (Trait/Curse/Rebirth Token ฯลฯ ที่อาจไม่แสดงบน ResultsUI)
+			-- 1) เทียบค่า _stats จริงตั้งแต่เริ่มด่าน -> จบด่าน (แม่นยำที่สุด ไม่มีค่าหลอก 99999)
 			local nowStats = Hub.SnapStats()
 			local oldStats = Hub.StageStartStats
+			local statsDeltaById = {}
 			if type(oldStats) == "table" then
 				for key, meta in pairs(STAT_KEYS) do
 					local o, n = oldStats[key], nowStats[key]
 					if type(o) == "number" and type(n) == "number" and n > o then
 						local d = math.floor(n - o)
 						if d >= 1 then
+							statsDeltaById[meta.id] = d
 							addBundle("currency", meta.id, meta.name, meta.rarity, d, meta.res and RES_ICON[meta.res] or nil)
+						end
+					end
+				end
+			end
+
+			-- 2) ดึงรางวัลจากหน้าต่าง ResultsUI เฉพาะช่องที่ Visible จริง และไม่เป็นค่าหลอกเทมเพลต 99999
+			if g and g.Enabled then
+				for _, f in ipairs(RESULT_FIELDS) do
+					local lbl = idx(g, f.path)
+					if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and isGuiVisible(lbl, g) then
+						local q = parseQty(lbl.Text)
+						local isTemplateFake = (q == 99999 or q == 999999) and (statsDeltaById[f.id] or 0) < 50000
+						if q > 0 and not isTemplateFake and not statsDeltaById[f.id] then
+							local icon = imgOf(g, f.imgPath) or (f.res and RES_ICON[f.res] or nil)
+							addBundle("currency", f.id, f.name, f.rarity, q, icon)
 						end
 					end
 				end

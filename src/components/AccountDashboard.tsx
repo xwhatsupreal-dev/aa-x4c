@@ -486,14 +486,23 @@ export function AccountDashboard({
           {/* Current Stage Card with Real Roblox MapIcons Artwork */}
           {stage && (
             <div className="mt-3.5 rounded-2xl bg-[#10151A] border border-white/[0.08] p-2.5 flex items-center gap-3">
-              <div className="relative w-14 h-14 shrink-0 overflow-hidden rounded-xl bg-[#161C24] border border-white/[0.08]">
+              <div className="relative w-14 h-14 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[#16212C] to-[#0E1319] border border-white/[0.10]">
                 <RobloxAssetThumb
+                  kind="stage"
+                  name={stage.name}
+                  itemId={stage.id}
+                  world={stage.world}
+                  map={stage.map}
                   assetId={stage.mapImageId}
                   alt={stage.name}
                   className="w-full h-full object-cover"
                   fallback={
-                    <div className="w-full h-full flex items-center justify-center text-zinc-500">
-                      {stage.inLobby ? <MapPin size={20} /> : <Swords size={20} className="text-[#10F5A0]" />}
+                    <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-zinc-400">
+                      {stage.inLobby ? (
+                        <MapPin size={20} className="text-zinc-400" />
+                      ) : (
+                        <Swords size={19} className="text-[#10F5A0]" />
+                      )}
                     </div>
                   }
                 />
@@ -774,14 +783,23 @@ export function AccountDashboard({
                           : `inset 0 0 0 1.5px ${meta.border}`,
                       }}
                     >
-                      {/* Center Unit Monogram / Emblem */}
-                      <div className="absolute inset-0 flex items-center justify-center pb-2">
-                        <span
-                          className="font-display text-sm sm:text-base font-extrabold tracking-tight drop-shadow"
-                          style={{ color: meta.text }}
-                        >
-                          {getUnitInitials(unit.name)}
-                        </span>
+                      {/* Real Anime Adventures Unit Portrait with Rarity Monogram Fallback */}
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <RobloxAssetThumb
+                          kind="unit"
+                          name={unit.name}
+                          itemId={unit.id}
+                          alt={unit.name}
+                          className="w-full h-full object-cover object-top"
+                          fallback={
+                            <span
+                              className="pb-2 font-display text-sm sm:text-base font-extrabold tracking-tight drop-shadow"
+                              style={{ color: meta.text }}
+                            >
+                              {getUnitInitials(unit.name)}
+                            </span>
+                          }
+                        />
                       </div>
 
                       {/* Top-left Trait micro-badge */}
@@ -841,13 +859,30 @@ export function AccountDashboard({
           {activeUnit && (
             <div className="mt-3 rounded-2xl bg-[#10151A] border border-[#10F5A0]/30 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <ItemEmblem
-                  kind="unit"
-                  rarity={activeUnit.rarity}
-                  name={activeUnit.name}
-                  shiny={activeUnit.shiny}
-                  size="sm"
-                />
+                <div
+                  className="w-10 h-10 rounded-lg shrink-0 overflow-hidden flex items-center justify-center"
+                  style={{
+                    backgroundColor: RARITY_META[activeUnit.rarity].softBg,
+                    border: `1px solid ${RARITY_META[activeUnit.rarity].border}`,
+                  }}
+                >
+                  <RobloxAssetThumb
+                    kind="unit"
+                    name={activeUnit.name}
+                    itemId={activeUnit.id}
+                    alt={activeUnit.name}
+                    className="w-full h-full object-cover object-top"
+                    fallback={
+                      <ItemEmblem
+                        kind="unit"
+                        rarity={activeUnit.rarity}
+                        name={activeUnit.name}
+                        shiny={activeUnit.shiny}
+                        size="md"
+                      />
+                    }
+                  />
+                </div>
                 <div className="min-w-0">
                   <p
                     className="text-sm font-bold truncate"
@@ -1233,7 +1268,7 @@ export function AccountDashboard({
                         key={batch.id}
                         className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3 py-3.5 sm:grid-cols-[7.25rem_minmax(0,1fr)]"
                       >
-                        {/* Left Stage Thumbnail Card with Real Roblox MapIcons Artwork */}
+                        {/* Left Stage Thumbnail Card with Real AA Stage Artwork */}
                         <div
                           className="relative row-span-1 flex flex-col justify-between aspect-video w-full self-start overflow-hidden rounded-xl p-2 sm:row-span-2 sm:aspect-auto sm:min-h-[4.5rem] sm:self-stretch"
                           style={{
@@ -1241,22 +1276,26 @@ export function AccountDashboard({
                             boxShadow: `inset 0 0 0 1px ${topMeta.border}`,
                           }}
                         >
-                          {batch.stageImageId && (
+                          {(batch.stageName || batch.stageWorld || batch.stageMap || batch.stageImageId) && (
                             <>
                               <RobloxAssetThumb
+                                kind="stage"
+                                name={batch.stageName}
+                                world={batch.stageWorld}
+                                map={batch.stageMap}
                                 assetId={batch.stageImageId}
                                 alt={batch.stageName || batch.srcShort}
                                 className="absolute inset-0 w-full h-full object-cover"
                               />
                               <div
                                 aria-hidden="true"
-                                className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/35 to-black/30"
+                                className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-black/25 pointer-events-none"
                               />
                             </>
                           )}
                           <span
                             className="relative z-10 text-[10px] font-mono font-bold tabular-nums drop-shadow"
-                            style={{ color: batch.stageImageId ? '#10F5A0' : topMeta.text }}
+                            style={{ color: isStageRun ? '#10F5A0' : topMeta.text }}
                           >
                             {batch.entries.length > 1
                               ? `${batch.entries.length} รายการ`
@@ -1311,6 +1350,9 @@ export function AccountDashboard({
                                 }}
                               >
                                 <RobloxAssetThumb
+                                  kind={entry.kind}
+                                  name={entry.name}
+                                  itemId={entry.id}
                                   assetId={entry.iconId}
                                   alt={entry.name}
                                   className="w-4 h-4 rounded object-contain shrink-0"
@@ -1396,36 +1438,34 @@ export function AccountDashboard({
                         }}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          {t.iconId ? (
-                            <div
-                              className="w-8 h-8 rounded-md shrink-0 overflow-hidden flex items-center justify-center"
-                              style={{
-                                backgroundColor: meta.softBg,
-                                border: `1px solid ${meta.border}`,
-                              }}
-                            >
-                              <RobloxAssetThumb
-                                assetId={t.iconId}
-                                alt={t.name}
-                                className="w-full h-full object-contain p-0.5"
-                                fallback={
-                                  <ItemEmblem
-                                    kind={t.kind}
-                                    rarity={t.rarity}
-                                    name={t.name}
-                                    size="sm"
-                                  />
-                                }
-                              />
-                            </div>
-                          ) : (
-                            <ItemEmblem
+                          <div
+                            className="w-9 h-9 rounded-lg shrink-0 overflow-hidden flex items-center justify-center"
+                            style={{
+                              backgroundColor: meta.softBg,
+                              border: `1px solid ${meta.border}`,
+                            }}
+                          >
+                            <RobloxAssetThumb
                               kind={t.kind}
-                              rarity={t.rarity}
                               name={t.name}
-                              size="sm"
+                              itemId={t.id}
+                              assetId={t.iconId}
+                              alt={t.name}
+                              className={
+                                t.kind === 'unit'
+                                  ? 'w-full h-full object-cover object-top'
+                                  : 'w-full h-full object-contain p-0.5'
+                              }
+                              fallback={
+                                <ItemEmblem
+                                  kind={t.kind}
+                                  rarity={t.rarity}
+                                  name={t.name}
+                                  size="sm"
+                                />
+                              }
                             />
-                          )}
+                          </div>
                           <div className="min-w-0">
                             <p
                               className="text-sm font-semibold truncate"
@@ -1658,38 +1698,35 @@ export function AccountDashboard({
                         }}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          {it.iconId ? (
-                            <div
-                              className="w-8 h-8 rounded-md shrink-0 overflow-hidden flex items-center justify-center"
-                              style={{
-                                backgroundColor: meta.softBg,
-                                border: `1px solid ${meta.border}`,
-                              }}
-                            >
-                              <RobloxAssetThumb
-                                assetId={it.iconId}
-                                alt={it.name}
-                                className="w-full h-full object-contain p-0.5"
-                                fallback={
-                                  <ItemEmblem
-                                    kind={it.kind === 'unit' ? 'unit' : 'item'}
-                                    group={it.group}
-                                    rarity={it.rarity}
-                                    name={it.name}
-                                    size="sm"
-                                  />
-                                }
-                              />
-                            </div>
-                          ) : (
-                            <ItemEmblem
+                          <div
+                            className="w-10 h-10 rounded-lg shrink-0 overflow-hidden flex items-center justify-center"
+                            style={{
+                              backgroundColor: meta.softBg,
+                              border: `1px solid ${meta.border}`,
+                            }}
+                          >
+                            <RobloxAssetThumb
                               kind={it.kind === 'unit' ? 'unit' : 'item'}
-                              group={it.group}
-                              rarity={it.rarity}
                               name={it.name}
-                              size="sm"
+                              itemId={it.id}
+                              assetId={it.iconId}
+                              alt={it.name}
+                              className={
+                                it.kind === 'unit'
+                                  ? 'w-full h-full object-cover object-top'
+                                  : 'w-full h-full object-contain p-0.5'
+                              }
+                              fallback={
+                                <ItemEmblem
+                                  kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                  group={it.group}
+                                  rarity={it.rarity}
+                                  name={it.name}
+                                  size="md"
+                                />
+                              }
                             />
-                          )}
+                          </div>
                           <span className="rounded-lg bg-black/55 px-2 py-0.5 font-mono text-xs font-bold tabular-nums text-[#10F5A0]">
                             ×{formatNumber(it.qty)}
                           </span>
@@ -1732,38 +1769,35 @@ export function AccountDashboard({
                           >
                             <td className="py-2.5 pl-5 pr-3">
                               <div className="flex items-center gap-2.5 min-w-[170px]">
-                                {it.iconId ? (
-                                  <div
-                                    className="w-8 h-8 rounded-md shrink-0 overflow-hidden flex items-center justify-center"
-                                    style={{
-                                      backgroundColor: meta.softBg,
-                                      border: `1px solid ${meta.border}`,
-                                    }}
-                                  >
-                                    <RobloxAssetThumb
-                                      assetId={it.iconId}
-                                      alt={it.name}
-                                      className="w-full h-full object-contain p-0.5"
-                                      fallback={
-                                        <ItemEmblem
-                                          kind={it.kind === 'unit' ? 'unit' : 'item'}
-                                          group={it.group}
-                                          rarity={it.rarity}
-                                          name={it.name}
-                                          size="sm"
-                                        />
-                                      }
-                                    />
-                                  </div>
-                                ) : (
-                                  <ItemEmblem
+                                <div
+                                  className="w-8 h-8 rounded-md shrink-0 overflow-hidden flex items-center justify-center"
+                                  style={{
+                                    backgroundColor: meta.softBg,
+                                    border: `1px solid ${meta.border}`,
+                                  }}
+                                >
+                                  <RobloxAssetThumb
                                     kind={it.kind === 'unit' ? 'unit' : 'item'}
-                                    group={it.group}
-                                    rarity={it.rarity}
                                     name={it.name}
-                                    size="sm"
+                                    itemId={it.id}
+                                    assetId={it.iconId}
+                                    alt={it.name}
+                                    className={
+                                      it.kind === 'unit'
+                                        ? 'w-full h-full object-cover object-top'
+                                        : 'w-full h-full object-contain p-0.5'
+                                    }
+                                    fallback={
+                                      <ItemEmblem
+                                        kind={it.kind === 'unit' ? 'unit' : 'item'}
+                                        group={it.group}
+                                        rarity={it.rarity}
+                                        name={it.name}
+                                        size="sm"
+                                      />
+                                    }
                                   />
-                                )}
+                                </div>
                                 <div className="min-w-0">
                                   <p
                                     className="font-semibold truncate"

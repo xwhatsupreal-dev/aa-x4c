@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.5.0';
-export const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 17:45 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.5.1';
+export const SCRIPT_UPDATED_AT = '21 พ.ย. 2569 · 22:45 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,15 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.5.1',
+    updatedAt: '21 พ.ย. 2569 · 22:45 น. (เวลาไทย)',
+    highlights: [
+      'แก้ปัญหารูปกากบาทสีขาวจาก Roblox Private Asset — ดึงรูปด่าน, รูปทีม 6 ตัว, ไอเทม และเหรียญจากฐานข้อมูล Anime Adventures จริงพร้อมแคชไว 24 ชม. และสลับไปไอคอนธีมมืดอัตโนมัติถ้ายังไม่มีรูป',
+      'แก้บั๊กหน้าจบด่าน ResultsUI ดึงค่าหลอก +99,999 จากช่องที่ซ่อนอยู่ (ตรวจ .Visible ทุกชั้น + เทียบผลต่าง _stats จริงเป็นหลัก)',
+      'ปรับการอ่านเลเวลตัวละครและเลเวลยูนิตในทีม 6 ตัวให้แม่นยำขึ้น (ไม่โดนเลเวลในด่าน Lv.1 ทับ)',
+    ],
+  },
   {
     version: '2.5.0',
     updatedAt: '21 พ.ย. 2569 · 17:45 น. (เวลาไทย)',

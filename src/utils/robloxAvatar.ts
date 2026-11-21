@@ -295,6 +295,13 @@ export async function fetchRobloxAvatarInfo(
   };
 }
 
+const BLOCKED_RBX_PLACEHOLDER_RE =
+  /180DAY-(?:e5bef3179d5ce82a42fdc8ddc83a2ba9|a53354b1f60a5dedc00d0600d1491075)/i;
+
+export function isBlockedRobloxPlaceholderUrl(raw: string): boolean {
+  return BLOCKED_RBX_PLACEHOLDER_RE.test(raw);
+}
+
 const assetThumbCache = new Map<string, { url: string | null; expiresAt: number }>();
 
 export function extractRobloxAssetId(raw: unknown): string | null {
@@ -316,7 +323,7 @@ export async function resolveRobloxAssetImageUrl(rawId: string): Promise<string 
     const url = await fetchThumbnailWithRetry(
       `https://thumbnails.roblox.com/v1/assets?assetIds=${id}&size=${size}&format=Png&isCircular=false`
     );
-    if (url && isAllowedRobloxCdnUrl(url)) {
+    if (url && isAllowedRobloxCdnUrl(url) && !isBlockedRobloxPlaceholderUrl(url)) {
       assetThumbCache.set(id, { url, expiresAt: Date.now() + 3600_000 });
       return url;
     }
@@ -325,4 +332,5 @@ export async function resolveRobloxAssetImageUrl(rawId: string): Promise<string 
   assetThumbCache.set(id, { url: null, expiresAt: Date.now() + 300_000 });
   return null;
 }
+
 
