@@ -36,6 +36,7 @@ import type {
 } from '../types.ts';
 import { ItemEmblem } from './ItemEmblem.tsx';
 import { RobloxAvatarStage } from './RobloxAvatarStage.tsx';
+import { RobloxHeadshot } from './RobloxHeadshot.tsx';
 
 export type DashboardTab = 'drops' | 'obtained' | 'inventory';
 
@@ -43,7 +44,6 @@ interface AccountDashboardProps {
   account: AccountSnapshot;
   nowTs: number;
   syncKey: string;
-  apiBase: string;
   storageLabel: string;
   isReadOnly: boolean;
   activeTab: DashboardTab;
@@ -98,7 +98,6 @@ export function AccountDashboard({
   account,
   nowTs,
   syncKey,
-  apiBase,
   storageLabel,
   isReadOnly,
   activeTab,
@@ -358,11 +357,10 @@ export function AccountDashboard({
             </span>
           </div>
 
-          {/* 3D Full-Body Roblox Character Stage */}
+          {/* Real Roblox Full-Body Character Stage */}
           <RobloxAvatarStage
             userId={account.userId}
             username={account.username}
-            apiBase={apiBase}
             online={online}
           />
         </div>
@@ -373,9 +371,11 @@ export function AccountDashboard({
             {account.displayName}
           </h2>
           <div className="mt-2 flex items-center gap-2.5">
-            <div className="size-9 shrink-0 rounded-xl bg-[#10F5A0]/12 border border-[#10F5A0]/30 flex items-center justify-center font-display text-xs font-extrabold text-[#10F5A0]">
-              AA
-            </div>
+            <RobloxHeadshot
+              userId={account.userId}
+              username={account.username}
+              size="md"
+            />
             <div className="min-w-0">
               <p className="text-sm font-semibold text-zinc-100 truncate">
                 @{account.username}

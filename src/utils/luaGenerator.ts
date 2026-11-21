@@ -644,11 +644,50 @@ local function buildPayloadJson()
 		}
 	end
 
+	local function colorToHex(c, fallback)
+		if typeof and typeof(c) == "Color3" then
+			local ok, hex = pcall(function() return "#" .. c:ToHex() end)
+			if ok and hex then return hex end
+		end
+		return fallback
+	end
+
+	local function readCharacterAppearance()
+		local ch = LP.Character
+		if not ch then return nil end
+		local rig = "R15"
+		local hum = ch:FindFirstChildOfClass("Humanoid")
+		if hum and hum.RigType == Enum.HumanoidRigType.R6 then
+			rig = "R6"
+		end
+		local bc = ch:FindFirstChildOfClass("BodyColors")
+		local headP = ch:FindFirstChild("Head")
+		local torsoP = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+		local laP = ch:FindFirstChild("LeftUpperArm") or ch:FindFirstChild("Left Arm")
+		local raP = ch:FindFirstChild("RightUpperArm") or ch:FindFirstChild("Right Arm")
+		local llP = ch:FindFirstChild("LeftUpperLeg") or ch:FindFirstChild("Left Leg")
+		local rlP = ch:FindFirstChild("RightUpperLeg") or ch:FindFirstChild("Right Leg")
+		return {
+			avatarType = rig,
+			bodyColors = {
+				head = colorToHex((bc and bc.HeadColor3) or (headP and headP.Color), "#EAB892"),
+				torso = colorToHex((bc and bc.TorsoColor3) or (torsoP and torsoP.Color), "#0D69AC"),
+				leftArm = colorToHex((bc and bc.LeftArmColor3) or (laP and laP.Color), "#EAB892"),
+				rightArm = colorToHex((bc and bc.RightArmColor3) or (raP and raP.Color), "#EAB892"),
+				leftLeg = colorToHex((bc and bc.LeftLegColor3) or (llP and llP.Color), "#263238"),
+				rightLeg = colorToHex((bc and bc.RightLegColor3) or (rlP and rlP.Color), "#263238"),
+			},
+		}
+	end
+
+	local okApp, liveAvatar = pcall(readCharacterAppearance)
+
 	local payload = {
 		syncKey = SYNC_KEY,
 		username = LP.Name,
 		displayName = LP.DisplayName,
 		userId = LP.UserId,
+		avatar = okApp and liveAvatar or nil,
 		gold = pd and safeNum(pd.gold_amount) or 0,
 		gems = pd and safeNum(pd.gem_amount) or 0,
 		level = pd and safeNum(pd.level or pd.player_level) or nil,

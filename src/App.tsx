@@ -18,6 +18,7 @@ import {
 import type { AccountSnapshot, RewardEntry, SyncPayload } from './types.ts';
 import { AccountDashboard, type DashboardTab } from './components/AccountDashboard.tsx';
 import { LuaSyncView } from './components/LuaSyncView.tsx';
+import { RobloxHeadshot } from './components/RobloxHeadshot.tsx';
 import { ShareModal } from './components/ShareModal.tsx';
 
 type NavTab = DashboardTab | 'sync';
@@ -715,28 +716,35 @@ export default function App() {
                         setSelectedAccountId(acc.accountId);
                         if (activeTab === 'sync') setActiveTab('drops');
                       }}
-                      className="w-full text-left px-3.5 py-2.5 pr-9 cursor-pointer"
+                      className="w-full text-left px-3 py-2.5 pr-9 flex items-center gap-2.5 cursor-pointer"
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className={`w-2 h-2 rounded-full shrink-0 ${
-                            online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-600'
+                      <RobloxHeadshot
+                        userId={acc.userId}
+                        username={acc.username}
+                        size="sm"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className={`w-2 h-2 rounded-full shrink-0 ${
+                              online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-600'
+                            }`}
+                          />
+                          <p className="text-sm font-semibold text-white truncate">
+                            {acc.displayName}
+                          </p>
+                        </div>
+                        <p className="mt-0.5 text-[11px] font-mono tabular-nums text-zinc-400 truncate">
+                          {formatCompact(acc.gems)} Gems · {formatCompact(acc.gold)} Gold
+                        </p>
+                        <p
+                          className={`mt-0.5 text-[10px] truncate ${
+                            online ? 'text-[#10F5A0]' : 'text-zinc-500'
                           }`}
-                        />
-                        <p className="text-sm font-semibold text-white truncate">
-                          {acc.displayName}
+                        >
+                          {online ? 'ออนไลน์' : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
                         </p>
                       </div>
-                      <p className="mt-0.5 text-[11px] font-mono tabular-nums text-zinc-400 truncate">
-                        {formatCompact(acc.gems)} Gems · {formatCompact(acc.gold)} Gold
-                      </p>
-                      <p
-                        className={`mt-0.5 text-[10px] truncate ${
-                          online ? 'text-[#10F5A0]' : 'text-zinc-500'
-                        }`}
-                      >
-                        {online ? 'ออนไลน์' : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
-                      </p>
                     </button>
 
                     <button
@@ -842,7 +850,6 @@ export default function App() {
             account={activeAccount}
             nowTs={nowTs}
             syncKey={syncKey}
-            apiBase={activeApiBase}
             storageLabel={storageShortLabel}
             isReadOnly={Boolean(shareId)}
             activeTab={activeTab === 'sync' ? 'drops' : activeTab}

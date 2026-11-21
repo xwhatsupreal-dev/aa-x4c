@@ -5,6 +5,7 @@ import express, { type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import { formatClock, normalizeRarity } from './src/data/aaCatalog.ts';
 import { generateWebSyncLuaScript } from './src/utils/luaGenerator.ts';
+import { fetchRobloxAvatarInfo, isAllowedRobloxCdnUrl } from './src/utils/robloxAvatar.ts';
 import type {
   AccountSnapshot,
   InventoryItem,
@@ -195,6 +196,7 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     username,
     displayName: String(payload.displayName || existing?.displayName || username),
     userId: typeof payload.userId === 'number' ? payload.userId : existing?.userId,
+    avatar: payload.avatar ?? existing?.avatar,
     gold: typeof payload.gold === 'number' ? payload.gold : existing?.gold ?? 0,
     gems: typeof payload.gems === 'number' ? payload.gems : existing?.gems ?? 0,
     level: typeof payload.level === 'number' ? payload.level : existing?.level,
@@ -231,34 +233,49 @@ async function startServer() {
     res.json({ ok: true, serverless: false, provider: 'express', timestamp: Date.now() });
   });
 
-  // Proxy Roblox 3D full-body avatar thumbnail URL for the account profile stage
-  app.get('/api/avatar/:userId', async (req, res) => {
-    const userId = String(req.params.userId || '').trim();
-    if (!/^\d{1,15}$/.test(userId)) {
-      res.status(400).json({ ok: false, error: 'Invalid userId' });
+  // Resolve real Roblox character avatar + bodyColors + rig + assets (supports userId OR username)
+  app.get(['/api/avatar', '/api/avatar/:userId'], async (req, res) => {
+    const rawUserId =
+      typeof req.params.userId === 'string' && req.params.userId
+        ? req.params.userId
+        : typeof req.query.userId === 'string'
+          ? req.query.userId
+          : '';
+    const rawUsername = typeof req.query.username === 'string' ? req.query.username : '';
+    const info = await fetchRobloxAvatarInfo(rawUserId, rawUsername);
+    const proxyImageUrl = info.imageUrl
+      ? `/api/avatar-image?url=${encodeURIComponent(info.imageUrl)}`
+      : null;
+    const proxyHeadshotUrl = info.headshotUrl
+      ? `/api/avatar-image?url=${encodeURIComponent(info.headshotUrl)}`
+      : null;
+    res.setHeader('Cache-Control', 'public, max-age=600');
+    res.json({
+      ...info,
+      proxyImageUrl,
+      proxyHeadshotUrl,
+    });
+  });
+
+  // Same-origin PNG proxy strictly restricted to official Roblox CDN hosts (*.rbxcdn.com)
+  app.get('/api/avatar-image', async (req, res) => {
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    if (!rawUrl || !isAllowedRobloxCdnUrl(rawUrl)) {
+      res.status(400).end('Invalid Roblox CDN URL');
       return;
     }
     try {
-      const upstream = await fetch(
-        `https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`,
-        { headers: { Accept: 'application/json' } }
-      );
+      const upstream = await fetch(rawUrl);
       if (!upstream.ok) {
-        res.json({ ok: false, imageUrl: null });
+        res.status(upstream.status).end();
         return;
       }
-      const data = (await upstream.json()) as {
-        data?: Array<{ state?: string; imageUrl?: string }>;
-      };
-      const entry = data?.data?.[0];
-      const imageUrl =
-        entry?.state === 'Completed' && typeof entry.imageUrl === 'string' && entry.imageUrl
-          ? entry.imageUrl
-          : null;
-      res.setHeader('Cache-Control', 'public, max-age=600');
-      res.json({ ok: Boolean(imageUrl), imageUrl });
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.send(buf);
     } catch {
-      res.json({ ok: false, imageUrl: null });
+      res.status(502).end();
     }
   });
 

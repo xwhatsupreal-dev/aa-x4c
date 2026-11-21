@@ -56,6 +56,7 @@ interface AccountSnapshot {
   username: string;
   displayName: string;
   userId?: number;
+  avatar?: RobloxAvatarAppearance;
   gold: number;
   gems: number;
   level?: number;
@@ -69,6 +70,24 @@ interface AccountSnapshot {
   source: 'lua';
 }
 
+interface RobloxAvatarAppearance {
+  avatarType?: 'R6' | 'R15';
+  bodyColors?: {
+    head: string;
+    torso: string;
+    leftArm: string;
+    rightArm: string;
+    leftLeg: string;
+    rightLeg: string;
+  };
+  scales?: {
+    height?: number;
+    width?: number;
+    head?: number;
+    depth?: number;
+  };
+}
+
 interface ShareRecord {
   shareId: string;
   createdAt: number;
@@ -80,6 +99,7 @@ interface SyncPayload {
   username?: string;
   displayName?: string;
   userId?: number;
+  avatar?: RobloxAvatarAppearance;
   gold?: number;
   gems?: number;
   level?: number;
@@ -313,6 +333,7 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
     username,
     displayName: String(payload.displayName || existing?.displayName || username),
     userId: typeof payload.userId === 'number' ? payload.userId : existing?.userId,
+    avatar: payload.avatar ?? existing?.avatar,
     gold: typeof payload.gold === 'number' ? payload.gold : existing?.gold ?? 0,
     gems: typeof payload.gems === 'number' ? payload.gems : existing?.gems ?? 0,
     level: typeof payload.level === 'number' ? payload.level : existing?.level,
@@ -1112,11 +1133,50 @@ local function buildPayloadJson()
 		}
 	end
 
+	local function colorToHex(c, fallback)
+		if typeof and typeof(c) == "Color3" then
+			local ok, hex = pcall(function() return "#" .. c:ToHex() end)
+			if ok and hex then return hex end
+		end
+		return fallback
+	end
+
+	local function readCharacterAppearance()
+		local ch = LP.Character
+		if not ch then return nil end
+		local rig = "R15"
+		local hum = ch:FindFirstChildOfClass("Humanoid")
+		if hum and hum.RigType == Enum.HumanoidRigType.R6 then
+			rig = "R6"
+		end
+		local bc = ch:FindFirstChildOfClass("BodyColors")
+		local headP = ch:FindFirstChild("Head")
+		local torsoP = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+		local laP = ch:FindFirstChild("LeftUpperArm") or ch:FindFirstChild("Left Arm")
+		local raP = ch:FindFirstChild("RightUpperArm") or ch:FindFirstChild("Right Arm")
+		local llP = ch:FindFirstChild("LeftUpperLeg") or ch:FindFirstChild("Left Leg")
+		local rlP = ch:FindFirstChild("RightUpperLeg") or ch:FindFirstChild("Right Leg")
+		return {
+			avatarType = rig,
+			bodyColors = {
+				head = colorToHex((bc and bc.HeadColor3) or (headP and headP.Color), "#EAB892"),
+				torso = colorToHex((bc and bc.TorsoColor3) or (torsoP and torsoP.Color), "#0D69AC"),
+				leftArm = colorToHex((bc and bc.LeftArmColor3) or (laP and laP.Color), "#EAB892"),
+				rightArm = colorToHex((bc and bc.RightArmColor3) or (raP and raP.Color), "#EAB892"),
+				leftLeg = colorToHex((bc and bc.LeftLegColor3) or (llP and llP.Color), "#263238"),
+				rightLeg = colorToHex((bc and bc.RightLegColor3) or (rlP and rlP.Color), "#263238"),
+			},
+		}
+	end
+
+	local okApp, liveAvatar = pcall(readCharacterAppearance)
+
 	local payload = {
 		syncKey = SYNC_KEY,
 		username = LP.Name,
 		displayName = LP.DisplayName,
 		userId = LP.UserId,
+		avatar = okApp and liveAvatar or nil,
 		gold = pd and safeNum(pd.gold_amount) or 0,
 		gems = pd and safeNum(pd.gem_amount) or 0,
 		level = pd and safeNum(pd.level or pd.player_level) or nil,
@@ -1478,35 +1538,171 @@ export default async function handler(req: Req, res: ServerResponse) {
     return;
   }
 
-  // Proxy Roblox 3D full-body avatar thumbnail URL for the account profile stage
-  const avatarMatch = pathname.match(/^\/api\/avatar\/(\d{1,15})$/);
-  if (req.method === 'GET' && avatarMatch) {
-    const userId = avatarMatch[1];
+  // Resolve real Roblox character avatar + bodyColors + rig + assets (supports userId OR username)
+  const avatarIdMatch = pathname.match(/^\/api\/avatar\/(\d{1,15})$/);
+  if (req.method === 'GET' && (pathname === '/api/avatar' || avatarIdMatch)) {
+    const rawUserId = avatarIdMatch ? avatarIdMatch[1] : parsedUrl.searchParams.get('userId') || '';
+    const rawUsername = (parsedUrl.searchParams.get('username') || '').trim();
+    const BRICK_MAP: Record<number, string> = {
+      1: '#F2F3F3', 5: '#D7C59A', 9: '#E8BAC8', 11: '#80BBDB', 12: '#CB8442', 18: '#CC8E69',
+      21: '#C4281C', 22: '#C470A0', 23: '#0D69AC', 24: '#F5CD30', 25: '#624732', 26: '#1B2A35',
+      28: '#287F47', 37: '#4B974B', 38: '#A05F35', 45: '#B4D2E4', 101: '#DA867A', 102: '#6E99CA',
+      104: '#6B327C', 105: '#E29B40', 106: '#DA8541', 107: '#008F9C', 125: '#EAB892', 135: '#74869D',
+      192: '#694028', 194: '#A3A2A5', 199: '#635F62', 208: '#E5E4DF', 217: '#7C5C46', 226: '#FDEA8D',
+      305: '#527CAE', 307: '#102A4C', 312: '#3E3C39', 327: '#970000', 330: '#FF98DC', 331: '#FF5959',
+      334: '#F8D96D', 335: '#E7E7EC', 340: '#F1E7C7', 345: '#8F4C2A', 346: '#D3BE96', 348: '#EDEAEA',
+      351: '#BC9B5D', 352: '#C7AC78', 353: '#CABFA3', 355: '#6C584B', 359: '#AF9483', 361: '#564236',
+      1001: '#F8F8F8', 1002: '#CDCDCD', 1003: '#111111', 1004: '#FF0000', 1005: '#FFB000',
+      1006: '#B480FF', 1009: '#FFFF00', 1010: '#0000FF', 1012: '#2154B9', 1013: '#04AFEC',
+      1016: '#FF66CC', 1018: '#12EED4', 1020: '#00FF00', 1024: '#AFDDFF', 1026: '#B1A7FF',
+      1030: '#FFCC99', 1031: '#6225D1', 1032: '#FF00BF',
+    };
+    const toHex = (id: unknown, fb: string) => {
+      const n = Number(id);
+      return Number.isFinite(n) && BRICK_MAP[n] ? BRICK_MAP[n] : fb;
+    };
+    const fetchThumb = async (url: string): Promise<string | null> => {
+      for (let i = 0; i < 2; i++) {
+        try {
+          const r = await fetch(url, { headers: { Accept: 'application/json' } });
+          if (!r.ok) return null;
+          const d = (await r.json()) as { data?: Array<{ state?: string; imageUrl?: string }> };
+          const e = d?.data?.[0];
+          if (e?.state === 'Completed' && e.imageUrl) return e.imageUrl;
+          if (e?.state === 'Pending' && i === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 450));
+            continue;
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    };
+
+    let uid: number | null = /^\d{1,15}$/.test(rawUserId) ? Number(rawUserId) : null;
+    if ((!uid || uid <= 0) && rawUsername) {
+      try {
+        const uRes = await fetch('https://users.roblox.com/v1/usernames/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ usernames: [rawUsername], excludeBannedUsers: false }),
+        });
+        if (uRes.ok) {
+          const uData = (await uRes.json()) as { data?: Array<{ id?: number }> };
+          const found = Number(uData?.data?.[0]?.id);
+          if (Number.isFinite(found) && found > 0) uid = found;
+        }
+      } catch {
+        // ignore username lookup error
+      }
+    }
+
+    if (!uid || uid <= 0) {
+      sendJson(res, { ok: false, userId: null, imageUrl: null, proxyImageUrl: null }, 200);
+      return;
+    }
+
+    const [imageUrl, headshotUrl, avatarJson] = await Promise.all([
+      fetchThumb(
+        `https://thumbnails.roblox.com/v1/users/avatar?userIds=${uid}&size=720x720&format=Png&isCircular=false`
+      ),
+      fetchThumb(
+        `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${uid}&size=420x420&format=Png&isCircular=false`
+      ),
+      fetch(`https://avatar.roblox.com/v1/users/${uid}/avatar`, {
+        headers: { Accept: 'application/json' },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ]);
+
+    const raw = avatarJson as {
+      playerAvatarType?: string;
+      scales?: { height?: number; width?: number; head?: number; depth?: number };
+      bodyColors?: {
+        headColorId?: number;
+        torsoColorId?: number;
+        leftArmColorId?: number;
+        rightArmColorId?: number;
+        leftLegColorId?: number;
+        rightLegColorId?: number;
+      };
+      assets?: Array<{ id?: number; name?: string; assetType?: { name?: string } }>;
+    } | null;
+
+    const bc = raw?.bodyColors;
+    const sc = raw?.scales;
+    const payload = {
+      ok: Boolean(imageUrl || headshotUrl || raw),
+      userId: uid,
+      imageUrl,
+      proxyImageUrl: imageUrl ? `/api/avatar-image?url=${encodeURIComponent(imageUrl)}` : null,
+      headshotUrl,
+      proxyHeadshotUrl: headshotUrl
+        ? `/api/avatar-image?url=${encodeURIComponent(headshotUrl)}`
+        : null,
+      avatarType: raw?.playerAvatarType === 'R6' ? 'R6' : 'R15',
+      bodyColors: {
+        head: toHex(bc?.headColorId, '#EAB892'),
+        torso: toHex(bc?.torsoColorId, '#0D69AC'),
+        leftArm: toHex(bc?.leftArmColorId, '#EAB892'),
+        rightArm: toHex(bc?.rightArmColorId, '#EAB892'),
+        leftLeg: toHex(bc?.leftLegColorId, '#263238'),
+        rightLeg: toHex(bc?.rightLegColorId, '#263238'),
+      },
+      scales: {
+        height: Math.min(1.25, Math.max(0.8, Number(sc?.height) || 1)),
+        width: Math.min(1.25, Math.max(0.7, Number(sc?.width) || 1)),
+        head: Math.min(1.2, Math.max(0.85, Number(sc?.head) || 1)),
+        depth: Math.min(1.2, Math.max(0.75, Number(sc?.depth) || 1)),
+      },
+      assets: Array.isArray(raw?.assets)
+        ? raw.assets
+            .filter((a) => a && a.name)
+            .slice(0, 16)
+            .map((a) => ({
+              id: Number(a.id) || 0,
+              name: String(a.name),
+              type: String(a.assetType?.name || 'Item'),
+            }))
+        : [],
+    };
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'public, max-age=600',
+      ...CORS_HEADERS,
+    });
+    res.end(JSON.stringify(payload));
+    return;
+  }
+
+  // Same-origin PNG proxy strictly restricted to official Roblox CDN hosts (*.rbxcdn.com)
+  if (req.method === 'GET' && pathname === '/api/avatar-image') {
+    const rawUrl = (parsedUrl.searchParams.get('url') || '').trim();
+    if (!rawUrl || !/^https:\/\/([a-z0-9-]+\.)?rbxcdn\.com\//i.test(rawUrl)) {
+      res.writeHead(400, CORS_HEADERS);
+      res.end('Invalid Roblox CDN URL');
+      return;
+    }
     try {
-      const upstream = await fetch(
-        `https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=420x420&format=Png&isCircular=false`,
-        { headers: { Accept: 'application/json' } }
-      );
+      const upstream = await fetch(rawUrl);
       if (!upstream.ok) {
-        sendJson(res, { ok: false, imageUrl: null }, 200);
+        res.writeHead(upstream.status, CORS_HEADERS);
+        res.end();
         return;
       }
-      const data = (await upstream.json()) as {
-        data?: Array<{ state?: string; imageUrl?: string }>;
-      };
-      const entry = data?.data?.[0];
-      const imageUrl =
-        entry?.state === 'Completed' && typeof entry.imageUrl === 'string' && entry.imageUrl
-          ? entry.imageUrl
-          : null;
+      const buf = Buffer.from(await upstream.arrayBuffer());
       res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'public, max-age=600',
+        'Content-Type': upstream.headers.get('content-type') || 'image/png',
+        'Cache-Control': 'public, max-age=3600',
         ...CORS_HEADERS,
       });
-      res.end(JSON.stringify({ ok: Boolean(imageUrl), imageUrl }));
+      res.end(buf);
     } catch {
-      sendJson(res, { ok: false, imageUrl: null }, 200);
+      res.writeHead(502, CORS_HEADERS);
+      res.end();
     }
     return;
   }

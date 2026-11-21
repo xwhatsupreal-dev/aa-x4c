@@ -51,11 +51,30 @@ export interface RewardTotal {
   qty: number;
 }
 
+export interface RobloxAvatarAppearance {
+  avatarType?: 'R6' | 'R15';
+  bodyColors?: {
+    head: string;
+    torso: string;
+    leftArm: string;
+    rightArm: string;
+    leftLeg: string;
+    rightLeg: string;
+  };
+  scales?: {
+    height?: number;
+    width?: number;
+    head?: number;
+    depth?: number;
+  };
+}
+
 export interface AccountSnapshot {
   accountId: string;
   username: string;
   displayName: string;
   userId?: number;
+  avatar?: RobloxAvatarAppearance;
   gold: number;
   gems: number;
   level?: number;
@@ -80,6 +99,7 @@ export interface SyncPayload {
   username: string;
   displayName?: string;
   userId?: number;
+  avatar?: RobloxAvatarAppearance;
   gold?: number;
   gems?: number;
   level?: number;
