@@ -398,7 +398,8 @@ end
 -- 2K | Anime Adventures — AA Vault Web Sync (HTTP + Clipboard + File)
 -- ส่งข้อมูลจริงจากในเกมขึ้นเว็บเช็คของ AA Vault
 -- ============================================================
-if getgenv().TwoK then pcall(function() getgenv().TwoK.Stop() end) end
+local env = (getgenv and getgenv()) or _G
+if env.TwoK then pcall(function() env.TwoK.Stop() end) end
 
 local SCRIPT_VERSION = "${SCRIPT_VERSION}"
 local SCRIPT_UPDATED_AT = "${SCRIPT_UPDATED_AT}"
@@ -415,18 +416,20 @@ local Hub = {
 	Equipped = {},
 	IconLookups = 0,
 	LastSync = 0,
+	LastGcScan = 0,
 	SyncStartedAt = 0,
 	SyncInFlight = false,
 	SyncCount = 0,
 	FailStreak = 0,
 	UpdateNotified = false,
+	FailNotified = false,
 	LatestVersion = SCRIPT_VERSION,
 	SyncOk = false,
 	HttpBlocked = false,
 	SyncStatus = "v" .. SCRIPT_VERSION .. " • กำลังเชื่อมต่อ...",
 }
 Hub.Flags = {Notify = true, Icons = true, MaxIcons = 45, WebSync = true}
-getgenv().TwoK = Hub
+env.TwoK = Hub
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -434,7 +437,15 @@ local HttpService = game:GetService("HttpService")
 local LP = Players.LocalPlayer
 local PG = LP:WaitForChild("PlayerGui")
 
-local httpRequest = request or http_request or httprequest or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
+local httpRequest =
+	request
+	or http_request
+	or httprequest
+	or (syn and syn.request)
+	or (fluxus and fluxus.request)
+	or (http and http.request)
+	or (env and (env.request or env.http_request or env.httprequest))
+local getGC = getgc or (debug and debug.getgc)
 local copyClip = setclipboard or toclipboard or set_clipboard or (Clipboard and Clipboard.set)
 local saveFile = writefile
 
@@ -476,7 +487,13 @@ local function rcol(r) return RCOL[tostring(r)] or Color3.fromRGB(150,150,165) e
 ------------------------------------------------------------------
 local function findProfile()
 	if Hub.Profile then return Hub.Profile end
-	for _, o in ipairs(getgc(true)) do
+	if type(getGC) ~= "function" then return nil end
+	local now = os.clock()
+	if Hub.LastGcScan > 0 and (now - Hub.LastGcScan) < 5 then return nil end
+	Hub.LastGcScan = now
+	local okGc, list = pcall(getGC, true)
+	if not okGc or type(list) ~= "table" then return nil end
+	for _, o in ipairs(list) do
 		if type(o) == "table" then
 			local ok, inv = pcall(rawget, o, "inventory")
 			if ok and type(inv) == "table" then
@@ -516,11 +533,14 @@ local function buildUnitMap()
 	end
 	local pd = findProfile()
 	if pd then
-		harvest(pd.units); harvest(pd.inventory); harvest(pd.collection)
+		pcall(harvest, pd.units); pcall(harvest, pd.inventory); pcall(harvest, pd.collection)
 	end
-	if next(map) == nil then
-		for _, o in ipairs(getgc(true)) do
-			if type(o) == "table" then harvest(o) end
+	if next(map) == nil and type(getGC) == "function" then
+		local okGc, list = pcall(getGC, true)
+		if okGc and type(list) == "table" then
+			for _, o in ipairs(list) do
+				if type(o) == "table" then pcall(harvest, o) end
+			end
 		end
 	end
 	return map
@@ -595,64 +615,77 @@ end
 -- 3) BUILD REAL PAYLOAD + WEB SYNC (HTTP + CLIPBOARD + FILE)
 ------------------------------------------------------------------
 local function buildPayloadJson()
-	local pd = findProfile()
-	local normal, unique = getInventory()
-	local unitMap = buildUnitMap()
-	local team = findEquipped(unitMap)
+	local okPd, pd = pcall(findProfile)
+	if not okPd then pd = nil end
+
+	local normal, unique = {}, {}
+	pcall(function()
+		normal, unique = getInventory()
+	end)
+
+	local team = {}
+	pcall(function()
+		local unitMap = buildUnitMap()
+		team = findEquipped(unitMap)
+	end)
 
 	local invList = {}
 	local uniqueCounts = {}
 	local uTotal = 0
 	local nKinds = 0
 
-	for k, v in pairs(normal) do
-		local id = tostring(k)
-		local qty = safeNum(v)
-		if qty > 0 then
-			nKinds = nKinds + 1
+	pcall(function()
+		for k, v in pairs(normal) do
+			local id = tostring(k)
+			local qty = safeNum(v)
+			if qty > 0 then
+				nKinds = nKinds + 1
+				invList[#invList + 1] = {
+					id = id,
+					name = iName(id),
+					rarity = iRarity(id),
+					group = iGroup(id),
+					qty = qty,
+					kind = "normal",
+				}
+			end
+		end
+
+		for _, v in pairs(unique) do
+			if type(v) == "table" and v.item_id then
+				local id = tostring(v.item_id)
+				uniqueCounts[id] = (uniqueCounts[id] or 0) + 1
+				uTotal = uTotal + 1
+			end
+		end
+		for id, qty in pairs(uniqueCounts) do
 			invList[#invList + 1] = {
 				id = id,
 				name = iName(id),
 				rarity = iRarity(id),
 				group = iGroup(id),
 				qty = qty,
-				kind = "normal",
+				kind = "unique",
 			}
 		end
-	end
-
-	for _, v in pairs(unique) do
-		if type(v) == "table" and v.item_id then
-			local id = tostring(v.item_id)
-			uniqueCounts[id] = (uniqueCounts[id] or 0) + 1
-			uTotal = uTotal + 1
-		end
-	end
-	for id, qty in pairs(uniqueCounts) do
-		invList[#invList + 1] = {
-			id = id,
-			name = iName(id),
-			rarity = iRarity(id),
-			group = iGroup(id),
-			qty = qty,
-			kind = "unique",
-		}
-	end
+	end)
 
 	local recentRewards = {}
-	for i = 1, math.min(#Hub.Rewards, 80) do
-		local r = Hub.Rewards[i]
-		recentRewards[#recentRewards + 1] = {
-			t = tostring(r.t),
-			ts = safeNum(r.ts),
-			kind = tostring(r.kind),
-			id = tostring(r.id),
-			name = tostring(r.name),
-			rarity = tostring(r.rarity),
-			qty = safeNum(r.qty),
-			src = tostring(r.src),
-		}
-	end
+	pcall(function()
+		for i = 1, math.min(#Hub.Rewards, 80) do
+			local r = Hub.Rewards[i]
+			recentRewards[#recentRewards + 1] = {
+				t = tostring(r.t),
+				ts = safeNum(r.ts),
+				kind = tostring(r.kind),
+				id = tostring(r.id),
+				name = tostring(r.name),
+				rarity = tostring(r.rarity),
+				qty = safeNum(r.qty),
+				src = tostring(r.src),
+			}
+		end
+	end)
 
 	local function colorToHex(c, fallback)
 		if typeof and typeof(c) == "Color3" then
@@ -716,7 +749,7 @@ end
 function Hub.CopyForWeb()
 	local ok, json, teamCount, invCount = pcall(buildPayloadJson)
 	if not ok then
-		Hub.SyncStatus = "สร้างข้อมูลล้มเหลว"
+		Hub.SyncStatus = "สร้างข้อมูลล้มเหลว: " .. tostring(json):sub(1, 50)
 		pcall(Hub.Render)
 		return
 	end
@@ -750,6 +783,12 @@ function Hub.SyncToWeb(force, reason)
 	if Hub.HttpBlocked and not force then return end
 	if not httpRequest then
 		Hub.SyncStatus = "ตัวรันไม่รองรับ HTTP — กดปุ่ม 'คัดลอกข้อมูลเข้าเว็บ'"
+		if not Hub.FailNotified then
+			Hub.FailNotified = true
+			pcall(function()
+				Hub.Toast("info", "ตัวรันนี้ไม่รองรับ request() — กดปุ่ม 'คัดลอกข้อมูลเข้าเว็บ'", "Epic", 1)
+			end)
+		end
 		pcall(Hub.Render)
 		return
 	end
@@ -769,15 +808,22 @@ function Hub.SyncToWeb(force, reason)
 			local res = httpRequest({
 				Url = WEB_URL,
 				Method = "POST",
-				Headers = { ["Content-Type"] = "application/json" },
+				Headers = {
+					["Content-Type"] = "application/json",
+					["Accept"] = "application/json",
+				},
 				Body = json,
 			})
-			local code = res and tonumber(res.StatusCode) or 0
-			local body = res and tostring(res.Body or "") or ""
-			if code == 200 and body:find('"ok"') then
+			local rawCode = res and (res.StatusCode or res.status_code or res.Status or res.status)
+			local code = tonumber(rawCode) or 0
+			local body = res and tostring(res.Body or res.body or "") or ""
+			local successFlag = res and (res.Success == true or res.success == true)
+			local bodyOk = body:find('"ok"') ~= nil
+			if (code >= 200 and code < 300 and bodyOk) or (successFlag and bodyOk) then
 				Hub.SyncOk = true
 				Hub.HttpBlocked = false
 				Hub.FailStreak = 0
+				Hub.FailNotified = false
 				Hub.SyncCount = Hub.SyncCount + 1
 				local latestVer = SCRIPT_VERSION
 				local decOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
@@ -799,20 +845,28 @@ function Hub.SyncToWeb(force, reason)
 			elseif code == 302 or code == 401 or code == 403 or body:find("cookie_check") or body:find("accounts.google.com") then
 				Hub.SyncOk = false
 				Hub.HttpBlocked = true
-				Hub.SyncStatus = "ติดล็อก Preview (HTTP " .. tostring(code) .. ") — กดปุ่ม 'คัดลอกข้อมูลเข้าเว็บ' ด้านบน"
+				Hub.SyncStatus = "ติดล็อก Preview/Auth (HTTP " .. tostring(code) .. ") — ใช้ลิงก์เว็บ Vercel จริง หรือกดคัดลอก"
 				pcall(function()
-					Hub.Toast("info", "เว็บติดล็อก Preview — กด 'คัดลอกข้อมูลเข้าเว็บ' แล้ว Ctrl+V บนเว็บ", "Epic", 1)
+					Hub.Toast("info", "ลิงก์นี้ติดล็อก Preview (HTTP " .. tostring(code) .. ") — ใช้ลิงก์ Vercel จริง", "Epic", 1)
 				end)
 			else
 				Hub.SyncOk = false
 				Hub.FailStreak = Hub.FailStreak + 1
-				Hub.SyncStatus = "HTTP " .. tostring(code) .. " — จะลองซิงค์ใหม่ใน " .. AUTO_SYNC_SEC .. " วิ"
+				local snippet = body:gsub("[%c]+", " "):sub(1, 36)
+				Hub.SyncStatus = "HTTP " .. tostring(code) .. (snippet ~= "" and (" (" .. snippet .. ")") or "") .. " • ลองใหม่ใน " .. AUTO_SYNC_SEC .. " วิ"
+				if not Hub.FailNotified then
+					Hub.FailNotified = true
+					pcall(function()
+						Hub.Toast("info", "ส่งเข้าเว็บไม่สำเร็จ HTTP " .. tostring(code) .. " — เช็ค URL หรือปุ่มคัดลอก", "Mythic", 1)
+					end)
+				end
 			end
 		end)
 		if not ok then
 			Hub.SyncOk = false
 			Hub.FailStreak = Hub.FailStreak + 1
-			Hub.SyncStatus = "เชื่อมต่อไม่ได้ — ลองใหม่ใน " .. AUTO_SYNC_SEC .. " วิ"
+			local shortErr = tostring(err):gsub("[%c]+", " "):sub(1, 46)
+			Hub.SyncStatus = "Err: " .. shortErr .. " • ลองใหม่ใน " .. AUTO_SYNC_SEC .. " วิ"
 			warn("[2K WebSync] Sync error (" .. tostring(reason or "auto") .. "):", err)
 		end
 		Hub.SyncInFlight = false

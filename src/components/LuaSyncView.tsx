@@ -63,6 +63,11 @@ export function LuaSyncView({
   onSubmitScriptPacket,
 }: LuaSyncViewProps) {
   const defaultOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+  const isPreviewHost =
+    hostname.endsWith('.run.app') ||
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1';
 
   const [keyInput, setKeyInput] = useState(syncKey);
   const [intervalSec, setIntervalSec] = useState(10);
@@ -72,6 +77,11 @@ export function LuaSyncView({
   const [copiedScript, setCopiedScript] = useState(false);
   const [showFullCode, setShowFullCode] = useState(false);
   const [showChangelog, setShowChangelog] = useState(false);
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [diagResult, setDiagResult] = useState<{
+    type: 'idle' | 'ok' | 'warn' | 'error';
+    text: string;
+  }>({ type: 'idle', text: '' });
 
   // Optional advanced panel (collapsed by default so users don't need to enter any Cloudflare link!)
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -280,6 +290,56 @@ export function LuaSyncView({
     }
   };
 
+  const handleRunDiagnostic = async () => {
+    if (diagRunning) return;
+    setDiagRunning(true);
+    setDiagResult({ type: 'idle', text: '' });
+    try {
+      const healthBase = cloudflareUrl ? cloudflareUrl.replace(/\/$/, '') : '';
+      const [hRes, sRes] = await Promise.all([
+        fetch(`${healthBase}/api/health`),
+        fetch(rawScriptUrl),
+      ]);
+      const hData = await hRes.json().catch(() => null);
+      const sText = await sRes.text().catch(() => '');
+      const scriptOk = sRes.ok && sText.includes('SCRIPT_VERSION') && sText.includes('/api/sync');
+
+      if (!hRes.ok || !hData?.ok) {
+        setDiagResult({
+          type: 'error',
+          text: `API ไม่ตอบกลับ (HTTP ${hRes.status}) — ตรวจสอบการ Deploy บน Vercel`,
+        });
+      } else if (!scriptOk) {
+        setDiagResult({
+          type: 'error',
+          text: `ลิงก์ /api/script ไม่ได้ส่งโค้ด Lua (HTTP ${sRes.status}) — แนะนำให้ Deploy โค้ดล่าสุดขึ้น Vercel ใหม่`,
+        });
+      } else if (isPreviewHost && !cloudflareUrl) {
+        setDiagResult({
+          type: 'warn',
+          text: 'ลิงก์นี้เป็นหน้า Preview ของ AI Studio (ติดล็อกบัญชี Google) — Roblox จะดึง/ส่งข้อมูลตรงไม่ได้ ต้องเปิดเว็บจากลิงก์ Vercel จริงของคุณ หรือใช้ปุ่ม "คัดลอกข้อมูลเข้าเว็บ" ในเกมแล้ววางที่นี่',
+        });
+      } else if (hData.provider === 'vercel-builtin' && !hData.persistent) {
+        setDiagResult({
+          type: 'warn',
+          text: 'API ทำงานแล้ว แต่ Vercel ยังไม่ได้เชื่อม Upstash Redis (ข้อมูลใน /tmp จะไม่แชร์ข้ามรอบ) — เข้า Vercel > Storage เชื่อม Upstash แล้วกด Redeploy 1 ครั้ง',
+        });
+      } else {
+        setDiagResult({
+          type: 'ok',
+          text: `พร้อมรับข้อมูล 100% · สคริปต์ v${hData.latestScriptVersion || SCRIPT_VERSION} · ระบบจัดเก็บ: ${hData.provider}`,
+        });
+      }
+    } catch {
+      setDiagResult({
+        type: 'error',
+        text: 'ทดสอบเชื่อมต่อไม่สำเร็จ — เช็คอินเทอร์เน็ตหรือสถานะเซิร์ฟเวอร์',
+      });
+    } finally {
+      setDiagRunning(false);
+    }
+  };
+
   const offlineTimeoutSec = Math.round(getOnlineTimeoutMs(intervalSec) / 1000);
   const outdatedAccountsCount = accounts.filter((a) => isScriptOutdated(a.scriptVersion)).length;
 
@@ -298,6 +358,38 @@ export function LuaSyncView({
           <span>v{SCRIPT_VERSION} · อัปเดต {SCRIPT_UPDATED_AT}</span>
         </span>
       </div>
+
+      {/* Warning when opened on Google AI Studio Preview URL (Roblox cannot bypass Google login) */}
+      {isPreviewHost && !cloudflareUrl && (
+        <section className="rounded-3xl bg-amber-500/[0.08] border border-amber-400/35 p-4 sm:p-5 flex items-start gap-3">
+          <AlertCircle size={18} className="text-amber-300 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs leading-relaxed">
+            <p className="font-bold text-amber-200">
+              หน้านี้คือลิงก์ Preview ส่วนตัว ({hostname}) — ตัวรัน Roblox จะส่งข้อมูลเข้ามาตรงๆ ไม่ได้
+            </p>
+            <p className="text-amber-100/80">
+              เพราะลิงก์ Preview ติดล็อกบัญชี Google ทำให้คำสั่ง <code className="font-mono text-amber-200">loadstring</code> และ HTTP Sync โดนบล็อก (HTTP 302)
+              — ให้เปิดหน้าเว็บจาก <strong className="text-white">ลิงก์ Vercel จริงของคุณ (เช่น xxx.vercel.app)</strong> แล้วค่อยคัดลอกสคริปต์ 1 บรรทัดไปรัน
+              หรือถ้าทดสอบผ่านหน้านี้ให้ใช้โค้ดเต็ม + กดปุ่ม <strong className="text-white">คัดลอกข้อมูลเข้าเว็บ</strong> ในเกมแล้วกด Ctrl+V ที่หน้านี้แทนครับ
+            </p>
+          </div>
+        </section>
+      )}
+
+      {/* Warning when deployed on Vercel without Upstash Redis env vars bound yet */}
+      {!isPreviewHost && !cloudflareUrl && backendProvider === 'vercel-builtin' && (
+        <section className="rounded-3xl bg-amber-500/[0.08] border border-amber-400/35 p-4 sm:p-5 flex items-start gap-3">
+          <AlertCircle size={18} className="text-amber-300 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs leading-relaxed">
+            <p className="font-bold text-amber-200">
+              Vercel ยังไม่ได้เชื่อมฐานข้อมูลถาวร (Upstash Redis) — ข้อมูลที่สคริปต์ส่งเข้ามาอาจไม่ขึ้นหรือหายไป
+            </p>
+            <p className="text-amber-100/80">
+              หากติดตั้ง <strong className="text-white">Upstash for Redis</strong> ใน Vercel แล้ว กรุณาตรวจสอบว่าเชื่อมต่อกับโปรเจกต์นี้ในเมนู <strong className="text-white">Storage</strong> และกด <strong className="text-white">Redeploy</strong> ใน Vercel 1 ครั้งเพื่อให้ระบบโหลดค่า Redis ใช้งานจริงครับ
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* Script Version & Update History Card */}
       <section className="rounded-3xl bg-[#0B0E11] border border-white/[0.08] overflow-hidden">
@@ -524,6 +616,16 @@ export function LuaSyncView({
 
             <button
               type="button"
+              onClick={handleRunDiagnostic}
+              disabled={diagRunning}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium rounded-full bg-[#12161B] border border-white/[0.10] text-zinc-200 hover:border-[#10F5A0]/40 hover:text-white disabled:opacity-50 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <RefreshCw size={13} className={diagRunning ? 'animate-spin' : ''} />
+              <span>{diagRunning ? 'กำลังเช็คระบบ...' : 'เช็คความพร้อม API'}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setShowFullCode((v) => !v)}
               className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium rounded-full bg-transparent border border-white/[0.08] text-zinc-400 hover:text-white hover:bg-white/[0.04] transition-colors whitespace-nowrap cursor-pointer"
             >
@@ -531,6 +633,20 @@ export function LuaSyncView({
               <span>{showFullCode ? 'ซ่อนโค้ดเต็ม' : 'ดูโค้ดเต็ม / ดาวน์โหลด .lua'}</span>
             </button>
           </div>
+
+          {diagResult.type !== 'idle' && (
+            <p
+              className={`text-xs rounded-xl px-3.5 py-2.5 border ${
+                diagResult.type === 'ok'
+                  ? 'bg-[#10F5A0]/10 border-[#10F5A0]/30 text-[#10F5A0]'
+                  : diagResult.type === 'warn'
+                    ? 'bg-amber-500/10 border-amber-400/35 text-amber-200'
+                    : 'bg-rose-500/10 border-rose-500/35 text-rose-300'
+              }`}
+            >
+              {diagResult.text}
+            </p>
+          )}
         </div>
 
         {showFullCode && (

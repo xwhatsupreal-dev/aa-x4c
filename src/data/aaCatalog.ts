@@ -125,8 +125,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.4.0';
-export const SCRIPT_UPDATED_AT = '21 พ.ย. 2026 · 12:30 น.';
+export const SCRIPT_VERSION = '2.4.1';
+export const SCRIPT_UPDATED_AT = '21 พ.ย. 2026 · 13:10 น.';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -135,6 +135,15 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.4.1',
+    updatedAt: '21 พ.ย. 2026 · 13:10 น.',
+    highlights: [
+      'รองรับตัวรันมือถือ/PC มากขึ้น (แก้การอ่าน StatusCode/Body หลายรูปแบบ และป้องกันสคริปต์ค้างเมื่อ getgc ช้า)',
+      'แก้เส้นทาง API บน Vercel และรองรับการส่ง JSON แม้ตัวรันไม่ส่ง Header Content-Type',
+      'แสดงสาเหตุ Error ตรงหน้าต่างสคริปต์ในเกมทันทีหากส่งข้อมูลไม่สำเร็จ',
+    ],
+  },
   {
     version: '2.4.0',
     updatedAt: '21 พ.ย. 2026 · 12:30 น.',

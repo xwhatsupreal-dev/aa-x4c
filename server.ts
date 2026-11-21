@@ -228,7 +228,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '5mb', type: ['application/json', 'application/*+json'] }));
+  app.use(express.text({ limit: '5mb', type: ['text/plain', 'application/x-www-form-urlencoded', '*/*'] }));
 
   // Allow cross-origin POST from Roblox executors
   app.use('/api', (_req, res, next) => {
@@ -378,7 +379,18 @@ async function startServer() {
 
   // Primary endpoint called directly by the running Roblox Lua script
   app.post('/api/sync', (req, res) => {
-    const body = req.body as SyncPayload;
+    let body: SyncPayload | null = null;
+    if (typeof req.body === 'string') {
+      try {
+        body = JSON.parse(req.body.replace(/^AAVAULT_SYNC::/, '')) as SyncPayload;
+      } catch {
+        res.status(400).json({ error: 'Invalid JSON payload' });
+        return;
+      }
+    } else if (req.body && typeof req.body === 'object') {
+      body = req.body as SyncPayload;
+    }
+
     if (!body || typeof body !== 'object') {
       res.status(400).json({ error: 'Invalid JSON payload' });
       return;
