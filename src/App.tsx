@@ -13,6 +13,7 @@ import {
   formatClock,
   formatCompact,
   formatRelativeTime,
+  getDisconnectHintTh,
   isAccountOnline,
   isScriptOutdated,
   RARITY_META,
@@ -100,6 +101,7 @@ export default function App() {
   const toastTimeouts = useRef<number[]>([]);
   const hasAutoSwitchedToSync = useRef(false);
   const seenRewardsRef = useRef<Set<string>>(new Set());
+  const seenDisconnectsRef = useRef<Map<string, string>>(new Map());
   const initialPollDoneRef = useRef(false);
 
   // Automatic zero-config API base: defaults directly to the site's own /api/* (Vercel or Express)
@@ -191,6 +193,24 @@ export default function App() {
     (list: AccountSnapshot[], triggerToasts: boolean) => {
       const freshRewards: RewardEntry[] = [];
       for (const acc of list) {
+        if (acc.disconnected) {
+          const discSig = `${acc.disconnectInfo?.at || acc.lastSyncedAt}|${acc.disconnectInfo?.errorCode || ''}|${acc.disconnectInfo?.message || ''}`;
+          if (seenDisconnectsRef.current.get(acc.accountId) !== discSig) {
+            seenDisconnectsRef.current.set(acc.accountId, discSig);
+            if (triggerToasts) {
+              const code = acc.disconnectInfo?.errorCode;
+              const hint = getDisconnectHintTh(code, acc.disconnectInfo?.message);
+              pushSystemToast(
+                `${acc.displayName} หลุดจากเกม${code ? ` (Error ${code})` : ''}`,
+                hint,
+                false
+              );
+            }
+          }
+        } else {
+          seenDisconnectsRef.current.delete(acc.accountId);
+        }
+
         for (const r of acc.rewards) {
           const sig = `${acc.accountId}|${r.runId || r.t}|${r.kind}|${r.id}|${r.qty}|${r.src}`;
           if (!seenRewardsRef.current.has(sig)) {
@@ -203,7 +223,7 @@ export default function App() {
         pushBundledToasts(freshRewards);
       }
     },
-    [pushBundledToasts]
+    [pushBundledToasts, pushSystemToast]
   );
 
   const fetchAccounts = useCallback(
@@ -272,6 +292,7 @@ export default function App() {
 
   useEffect(() => {
     seenRewardsRef.current.clear();
+    seenDisconnectsRef.current.clear();
     initialPollDoneRef.current = false;
     fetchAccounts(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -343,6 +364,20 @@ export default function App() {
         if (wasEmpty) {
           setActiveTab('drops');
         }
+        if (payload.account.disconnected) {
+          const dInfo = payload.account.disconnectInfo;
+          const discSig = `${dInfo?.at || payload.account.lastSyncedAt}|${dInfo?.errorCode || ''}|${dInfo?.message || ''}`;
+          if (seenDisconnectsRef.current.get(payload.account.accountId) !== discSig) {
+            seenDisconnectsRef.current.set(payload.account.accountId, discSig);
+            pushSystemToast(
+              `${payload.account.displayName} หลุดจากเกม${dInfo?.errorCode ? ` (Error ${dInfo.errorCode})` : ''}`,
+              getDisconnectHintTh(dInfo?.errorCode, dInfo?.message),
+              false
+            );
+          }
+        } else {
+          seenDisconnectsRef.current.delete(payload.account.accountId);
+        }
         if (Array.isArray(payload.newRewards) && payload.newRewards.length > 0) {
           pushBundledToasts(payload.newRewards);
         }
@@ -374,7 +409,15 @@ export default function App() {
       es.close();
       setLiveConnected(false);
     };
-  }, [shareId, syncKey, cloudflareUrl, isServerlessBackend, fetchAccounts, pushBundledToasts]);
+  }, [
+    shareId,
+    syncKey,
+    cloudflareUrl,
+    isServerlessBackend,
+    fetchAccounts,
+    pushBundledToasts,
+    pushSystemToast,
+  ]);
 
   const handleConnectCloudflare = useCallback(
     async (
@@ -588,7 +631,7 @@ export default function App() {
 
   const visibleNavItems = navItems.filter((item) => !(shareId && item.hideInShare));
   const onlineCount = accounts.filter((a) =>
-    isAccountOnline(a.lastSyncedAt, nowTs, a.syncIntervalSec)
+    isAccountOnline(a.lastSyncedAt, nowTs, a.syncIntervalSec, a.disconnected)
   ).length;
   const outdatedCount = accounts.filter((a) => isScriptOutdated(a.scriptVersion)).length;
 
@@ -785,15 +828,25 @@ export default function App() {
             <div className="flex items-stretch gap-2 overflow-x-auto pb-1.5">
               {accounts.map((acc) => {
                 const selected = activeAccount?.accountId === acc.accountId && activeTab !== 'sync';
-                const online = isAccountOnline(acc.lastSyncedAt, nowTs, acc.syncIntervalSec);
+                const online = isAccountOnline(
+                  acc.lastSyncedAt,
+                  nowTs,
+                  acc.syncIntervalSec,
+                  acc.disconnected
+                );
+                const isDisc = Boolean(acc.disconnected);
                 const outdated = isScriptOutdated(acc.scriptVersion);
                 return (
                   <div
                     key={acc.accountId}
                     className={`group relative shrink-0 min-w-[205px] max-w-[248px] rounded-2xl border transition-all ${
                       selected
-                        ? 'bg-[#101816] border-[#10F5A0]/55 shadow-[0_0_18px_rgba(16,245,160,0.10)]'
-                        : 'bg-[#0B0E11] border-white/[0.08] hover:border-white/[0.16]'
+                        ? isDisc
+                          ? 'bg-[#190F13] border-rose-500/60 shadow-[0_0_18px_rgba(244,63,94,0.14)]'
+                          : 'bg-[#101816] border-[#10F5A0]/55 shadow-[0_0_18px_rgba(16,245,160,0.10)]'
+                        : isDisc
+                          ? 'bg-[#120B0E] border-rose-500/35 hover:border-rose-400/55'
+                          : 'bg-[#0B0E11] border-white/[0.08] hover:border-white/[0.16]'
                     }`}
                   >
                     <button
@@ -813,7 +866,11 @@ export default function App() {
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span
                             className={`w-2 h-2 rounded-full shrink-0 ${
-                              online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-600'
+                              isDisc
+                                ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e]'
+                                : online
+                                  ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]'
+                                  : 'bg-zinc-600'
                             }`}
                           />
                           <p className="text-sm font-semibold text-white truncate">
@@ -821,17 +878,31 @@ export default function App() {
                           </p>
                         </div>
                         <p className="mt-0.5 text-[11px] font-mono tabular-nums text-zinc-400 truncate">
-                          {acc.currentStage && !acc.currentStage.inLobby
-                            ? `${acc.currentStage.name}${acc.currentStage.wave ? ` · W${acc.currentStage.wave}` : ''}`
-                            : `${formatCompact(acc.gems)} Gems · ${formatCompact(acc.gold)} Gold`}
+                          {isDisc && acc.disconnectInfo?.message
+                            ? acc.disconnectInfo.message
+                            : acc.currentStage && !acc.currentStage.inLobby
+                              ? `${acc.currentStage.name}${acc.currentStage.wave ? ` · W${acc.currentStage.wave}` : ''}`
+                              : `${formatCompact(acc.gems)} Gems · ${formatCompact(acc.gold)} Gold`}
                         </p>
                         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] truncate">
-                          <span className={online ? 'text-[#10F5A0]' : 'text-zinc-500'}>
-                            {online
-                              ? acc.syncIntervalSec
-                                ? `ออนไลน์ · เช็คทุก ${acc.syncIntervalSec} วิ`
-                                : 'ออนไลน์'
-                              : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
+                          <span
+                            className={
+                              isDisc
+                                ? 'text-rose-400 font-medium'
+                                : online
+                                  ? 'text-[#10F5A0]'
+                                  : 'text-zinc-500'
+                            }
+                          >
+                            {isDisc
+                              ? acc.disconnectInfo?.errorCode
+                                ? `หลุดเกม (Code ${acc.disconnectInfo.errorCode})`
+                                : `หลุดเกม · ${formatRelativeTime(acc.disconnectInfo?.at || acc.lastSyncedAt, nowTs)}`
+                              : online
+                                ? acc.syncIntervalSec
+                                  ? `ออนไลน์ · เช็คทุก ${acc.syncIntervalSec} วิ`
+                                  : 'ออนไลน์'
+                                : `ออฟไลน์ · ${formatRelativeTime(acc.lastSyncedAt, nowTs)}`}
                           </span>
                           {outdated && (
                             <span

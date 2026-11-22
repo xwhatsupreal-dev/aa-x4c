@@ -6,6 +6,7 @@ import {
   Code2,
   Coins,
   Copy,
+  Dices,
   Download,
   Gem,
   History,
@@ -20,6 +21,7 @@ import {
   Swords,
   Trash2,
   Trophy,
+  WifiOff,
   X,
 } from 'lucide-react';
 import {
@@ -28,6 +30,7 @@ import {
   formatNumber,
   formatRelativeTime,
   formatThaiDateTime,
+  getDisconnectHintTh,
   isAccountOnline,
   isScriptOutdated,
   RARITY_META,
@@ -192,7 +195,13 @@ export function AccountDashboard({
   const [invView, setInvView] = useState<'grid' | 'table'>('grid');
   const [copiedSummary, setCopiedSummary] = useState(false);
 
-  const online = isAccountOnline(account.lastSyncedAt, nowTs, account.syncIntervalSec);
+  const online = isAccountOnline(
+    account.lastSyncedAt,
+    nowTs,
+    account.syncIntervalSec,
+    account.disconnected
+  );
+  const isDisconnected = Boolean(account.disconnected);
   const scriptOutdated = isScriptOutdated(account.scriptVersion);
 
   // Fixed 6 team slots
@@ -365,32 +374,134 @@ export function AccountDashboard({
     return ex.resource ?? 0;
   }, [account.extraStats]);
 
-  const extraStatPills = useMemo(() => {
+  const rerollSummary = useMemo(() => {
     const ex = account.extraStats;
+    let bagTrait = 0;
+    let bagCurse = 0;
+    let bagStarRemnants = 0;
+    let bagStatCubes = 0;
+    let bagPerfectCubes = 0;
+    let traitIconId = account.currencyIcons?.traitReroll;
+    let curseIconId: string | undefined;
+    let starIconId: string | undefined;
+    let statCubeIconId: string | undefined;
+    let perfectCubeIconId: string | undefined;
+
+    for (const it of account.inventory) {
+      if (it.kind === 'unit') continue;
+      const hay = `${it.id} ${it.name}`.toLowerCase();
+      if (hay.includes('trait') && (hay.includes('reroll') || hay.includes('token'))) {
+        bagTrait += it.qty;
+        if (!traitIconId && it.iconId) traitIconId = it.iconId;
+      } else if (hay.includes('curse') && (hay.includes('reroll') || hay.includes('token'))) {
+        bagCurse += it.qty;
+        if (!curseIconId && it.iconId) curseIconId = it.iconId;
+      } else if (hay.includes('star_remnant') || hay.includes('star remnant')) {
+        bagStarRemnants += it.qty;
+        if (!starIconId && it.iconId) starIconId = it.iconId;
+      } else if (hay.includes('perfect_stat_cube') || hay.includes('perfect stat cube')) {
+        bagPerfectCubes += it.qty;
+        if (!perfectCubeIconId && it.iconId) perfectCubeIconId = it.iconId;
+      } else if (hay.includes('stat_cube') || hay.includes('stat cube')) {
+        bagStatCubes += it.qty;
+        if (!statCubeIconId && it.iconId) statCubeIconId = it.iconId;
+      }
+    }
+
+    return {
+      traitTokens: Math.max(ex?.traitTokens ?? 0, bagTrait),
+      curseTokens: Math.max(ex?.curseTokens ?? 0, bagCurse),
+      starRemnants: Math.max(ex?.starRemnants ?? 0, bagStarRemnants),
+      statCubes: Math.max(ex?.statCubes ?? 0, bagStatCubes),
+      perfectStatCubes: Math.max(ex?.perfectStatCubes ?? 0, bagPerfectCubes),
+      rebirthTokens: ex?.rebirthTokens ?? 0,
+      traitIconId,
+      curseIconId,
+      starIconId,
+      statCubeIconId,
+      perfectCubeIconId,
+    };
+  }, [account.extraStats, account.inventory, account.currencyIcons?.traitReroll]);
+
+  const extraStatPills = useMemo(() => {
     const items: Array<{
       key: string;
       label: string;
+      itemId: string;
       value: number;
       accent: string;
       iconId?: string;
-      isSummerPearls?: boolean;
+      alwaysShow?: boolean;
+      iconKind?: 'pearl' | 'reroll' | 'sparkle';
     }> = [
       {
         key: 'summer_pearls',
         label: 'Summer Pearls',
+        itemId: 'summer_pearls',
         value: summerPearlsVal,
         accent: '#67e8f9',
         iconId: account.currencyIcons?.summerPearls,
-        isSummerPearls: true,
+        alwaysShow: true,
+        iconKind: 'pearl',
       },
-      { key: 'trait', label: 'Trait', value: ex?.traitTokens ?? 0, accent: '#10F5A0' },
-      { key: 'curse', label: 'Curse', value: ex?.curseTokens ?? 0, accent: '#c084fc' },
-      { key: 'rebirth', label: 'Rebirth', value: ex?.rebirthTokens ?? 0, accent: '#f472b6' },
-      { key: 'xp', label: 'XP', value: ex?.playerXp ?? 0, accent: '#a78bfa' },
-      { key: 'behelit', label: 'Behelit', value: ex?.behelitXp ?? 0, accent: '#fb7185' },
+      {
+        key: 'trait_reroll',
+        label: 'Trait Reroll',
+        itemId: 'trait_reroll_tokens',
+        value: rerollSummary.traitTokens,
+        accent: '#10F5A0',
+        iconId: rerollSummary.traitIconId,
+        alwaysShow: true,
+        iconKind: 'reroll',
+      },
+      {
+        key: 'curse_reroll',
+        label: 'Curse Reroll',
+        itemId: 'curse_reroll_tokens',
+        value: rerollSummary.curseTokens,
+        accent: '#c084fc',
+        iconId: rerollSummary.curseIconId,
+        alwaysShow: true,
+        iconKind: 'reroll',
+      },
+      {
+        key: 'star_remnant',
+        label: 'Star Remnant',
+        itemId: 'star_remnant',
+        value: rerollSummary.starRemnants,
+        accent: '#fbbf24',
+        iconId: rerollSummary.starIconId,
+        iconKind: 'sparkle',
+      },
+      {
+        key: 'stat_cube',
+        label: 'Stat Cube',
+        itemId: 'stat_cube',
+        value: rerollSummary.statCubes,
+        accent: '#60a5fa',
+        iconId: rerollSummary.statCubeIconId,
+        iconKind: 'sparkle',
+      },
+      {
+        key: 'perfect_cube',
+        label: 'Perfect Cube',
+        itemId: 'perfect_stat_cube',
+        value: rerollSummary.perfectStatCubes,
+        accent: '#f472b6',
+        iconId: rerollSummary.perfectCubeIconId,
+        iconKind: 'sparkle',
+      },
+      {
+        key: 'rebirth',
+        label: 'Rebirth',
+        itemId: 'rebirth_tokens',
+        value: rerollSummary.rebirthTokens,
+        accent: '#fb7185',
+        iconKind: 'sparkle',
+      },
     ];
-    return items.filter((item) => item.isSummerPearls || item.value > 0);
-  }, [account.extraStats, account.currencyIcons?.summerPearls, summerPearlsVal]);
+    return items.filter((item) => item.alwaysShow || item.value > 0);
+  }, [account.currencyIcons?.summerPearls, summerPearlsVal, rerollSummary]);
 
   // Sorted aggregated totals (for "ไอเท็มที่ได้รับ" tab)
   const sortedTotals = useMemo(() => {
@@ -502,7 +613,7 @@ export function AccountDashboard({
   const handleCopyTradeSummary = async () => {
     const lines: string[] = [
       `=== เช็คของ Anime Adventures: ${account.displayName} (@${account.username}) ===`,
-      `Gold: ${formatNumber(account.gold)} | Gems: ${formatNumber(account.gems)} | Summer Pearls: ${formatNumber(summerPearlsVal)}${account.level ? ` | Lv.${account.level}` : ''}`,
+      `Gold: ${formatNumber(account.gold)} | Gems: ${formatNumber(account.gems)} | Summer Pearls: ${formatNumber(summerPearlsVal)} | Trait Reroll: ${formatNumber(rerollSummary.traitTokens)}${rerollSummary.curseTokens > 0 ? ` | Curse Reroll: ${formatNumber(rerollSummary.curseTokens)}` : ''}${account.level ? ` | Lv.${account.level}` : ''}`,
       '',
       `[ทีม 6 ตัว]`,
       ...account.equipped.map((u, i) => {
@@ -563,9 +674,11 @@ export function AccountDashboard({
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-0 top-0 h-56"
             style={{
-              background: online
-                ? 'radial-gradient(ellipse 85% 70% at 50% 10%, rgba(16, 245, 160, 0.14), rgba(11, 14, 17, 0) 75%)'
-                : 'radial-gradient(ellipse 85% 70% at 50% 10%, rgba(148, 163, 184, 0.10), rgba(11, 14, 17, 0) 75%)',
+              background: isDisconnected
+                ? 'radial-gradient(ellipse 85% 70% at 50% 10%, rgba(244, 63, 94, 0.18), rgba(11, 14, 17, 0) 75%)'
+                : online
+                  ? 'radial-gradient(ellipse 85% 70% at 50% 10%, rgba(16, 245, 160, 0.14), rgba(11, 14, 17, 0) 75%)'
+                  : 'radial-gradient(ellipse 85% 70% at 50% 10%, rgba(148, 163, 184, 0.10), rgba(11, 14, 17, 0) 75%)',
             }}
           />
 
@@ -590,22 +703,32 @@ export function AccountDashboard({
 
             <span
               className={`inline-flex items-center gap-2 rounded-full py-1 pl-2.5 pr-3 text-xs font-semibold border ${
-                online
-                  ? 'bg-[#10F5A0]/12 border-[#10F5A0]/35 text-[#10F5A0]'
-                  : 'bg-[#12161B]/90 border-white/[0.10] text-zinc-400'
+                isDisconnected
+                  ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                  : online
+                    ? 'bg-[#10F5A0]/12 border-[#10F5A0]/35 text-[#10F5A0]'
+                    : 'bg-[#12161B]/90 border-white/[0.10] text-zinc-400'
               }`}
             >
               <span
                 className={`w-2 h-2 rounded-full ${
-                  online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-500'
+                  isDisconnected
+                    ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e]'
+                    : online
+                      ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]'
+                      : 'bg-zinc-500'
                 }`}
               />
               <span>
-                {online
-                  ? account.syncIntervalSec
-                    ? `ออนไลน์ · เช็คทุก ${account.syncIntervalSec} วิ`
-                    : 'ออนไลน์'
-                  : 'ออฟไลน์'}
+                {isDisconnected
+                  ? account.disconnectInfo?.errorCode
+                    ? `หลุดเกม (Code ${account.disconnectInfo.errorCode})`
+                    : 'หลุดเกม (ออฟไลน์)'
+                  : online
+                    ? account.syncIntervalSec
+                      ? `ออนไลน์ · เช็คทุก ${account.syncIntervalSec} วิ`
+                      : 'ออนไลน์'
+                    : 'ออฟไลน์'}
               </span>
             </span>
           </div>
@@ -638,6 +761,48 @@ export function AccountDashboard({
               </p>
             </div>
           </div>
+
+          {/* Roblox Disconnect / Error Prompt Alert Card */}
+          {isDisconnected && (
+            <div className="mt-3.5 rounded-2xl bg-rose-500/[0.10] border border-rose-500/35 p-3">
+              <div className="flex items-start gap-2.5">
+                <span className="w-8 h-8 rounded-xl bg-rose-500/20 border border-rose-400/35 text-rose-300 flex items-center justify-center shrink-0">
+                  <WifiOff size={15} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5">
+                    <span className="text-xs font-bold text-rose-200">
+                      {account.disconnectInfo?.title || 'Disconnected'}
+                    </span>
+                    {account.disconnectInfo?.errorCode && (
+                      <span className="px-1.5 py-0.5 rounded-md bg-rose-500/25 border border-rose-400/40 text-[10px] font-mono font-bold text-rose-200">
+                        Error Code: {account.disconnectInfo.errorCode}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-[11px] font-medium text-rose-100 leading-snug">
+                    {getDisconnectHintTh(
+                      account.disconnectInfo?.errorCode,
+                      account.disconnectInfo?.message
+                    )}
+                  </p>
+                  {account.disconnectInfo?.message && (
+                    <p className="mt-1.5 rounded-lg bg-black/35 border border-rose-500/20 px-2 py-1.5 text-[10px] font-mono text-rose-200/85 break-words leading-relaxed">
+                      {account.disconnectInfo.message}
+                    </p>
+                  )}
+                  <p className="mt-1.5 text-[10px] font-mono text-rose-300/75 tabular-nums">
+                    ตรวจพบเมื่อ{' '}
+                    {formatClock(account.disconnectInfo?.at || account.lastSyncedAt)} น. ·{' '}
+                    {formatRelativeTime(
+                      account.disconnectInfo?.at || account.lastSyncedAt,
+                      nowTs
+                    )}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Current Stage Card with Real Roblox MapIcons Artwork */}
           {stage && (
@@ -824,25 +989,35 @@ export function AccountDashboard({
           </div>
         </div>
 
-        {/* Compact Extra Stats Strip (Summer Pearls with real in-game icon + XP / Tokens) */}
+        {/* Compact Extra Stats Strip (Summer Pearls + Rerolls with real in-game icons) */}
         {extraStatPills.length > 0 && (
           <div className="border-t border-white/[0.08] px-4 py-2.5 grid grid-cols-3 gap-x-2 gap-y-2.5 bg-white/[0.015]">
-            {extraStatPills.slice(0, 6).map((stat) => (
+            {extraStatPills.map((stat) => (
               <div key={stat.key} className="min-w-0">
                 <span className="flex items-center gap-1 text-[10px] text-zinc-400">
-                  {stat.isSummerPearls && (
-                    <span className="w-3.5 h-3.5 shrink-0 flex items-center justify-center">
+                  <span className="w-3.5 h-3.5 shrink-0 flex items-center justify-center">
+                    {stat.iconId ? (
                       <RobloxAssetThumb
                         kind="currency"
-                        name="Summer Pearls"
-                        itemId="summer_pearls"
+                        name={stat.label}
+                        itemId={stat.itemId}
                         assetId={stat.iconId}
-                        alt="Summer Pearls"
+                        alt={stat.label}
                         className="w-3.5 h-3.5 object-contain"
-                        fallback={<Sparkles size={11} className="text-cyan-300" />}
+                        fallback={
+                          stat.iconKind === 'reroll' ? (
+                            <Dices size={11} style={{ color: stat.accent }} />
+                          ) : (
+                            <Sparkles size={11} style={{ color: stat.accent }} />
+                          )
+                        }
                       />
-                    </span>
-                  )}
+                    ) : stat.iconKind === 'reroll' ? (
+                      <Dices size={11} style={{ color: stat.accent }} />
+                    ) : (
+                      <Sparkles size={11} style={{ color: stat.accent }} />
+                    )}
+                  </span>
                   <span className="truncate">{stat.label}</span>
                 </span>
                 <span
@@ -915,7 +1090,11 @@ export function AccountDashboard({
                 <div className="flex items-center gap-2 text-xs">
                   <span
                     className={`w-2 h-2 rounded-full ${
-                      online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-600'
+                      isDisconnected
+                        ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e]'
+                        : online
+                          ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]'
+                          : 'bg-zinc-600'
                     }`}
                   />
                   <span className="font-semibold text-white">

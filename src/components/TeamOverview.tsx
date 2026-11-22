@@ -23,7 +23,12 @@ export function TeamOverview({
   onGoDrops,
 }: TeamOverviewProps) {
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
-  const online = isAccountOnline(account.lastSyncedAt, nowTs);
+  const online = isAccountOnline(
+    account.lastSyncedAt,
+    nowTs,
+    account.syncIntervalSec,
+    account.disconnected
+  );
 
   // Build fixed 6 slots matching Anime Adventures team structure
   const slots: Array<{ slot: number; unit: TeamUnit | null }> = Array.from(

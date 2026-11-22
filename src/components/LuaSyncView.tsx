@@ -515,7 +515,12 @@ export function LuaSyncView({
         {accounts.length > 0 && (
           <ul className="mt-4 pt-4 border-t border-white/[0.07] divide-y divide-white/[0.06]">
             {accounts.map((acc) => {
-              const online = isAccountOnline(acc.lastSyncedAt, nowTs, acc.syncIntervalSec);
+              const online = isAccountOnline(
+                acc.lastSyncedAt,
+                nowTs,
+                acc.syncIntervalSec,
+                acc.disconnected
+              );
               const outdated = isScriptOutdated(acc.scriptVersion);
               return (
                 <li
@@ -526,7 +531,11 @@ export function LuaSyncView({
                     <div className="flex flex-wrap items-center gap-2">
                       <span
                         className={`w-2 h-2 rounded-full shrink-0 ${
-                          online ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]' : 'bg-zinc-600'
+                          online
+                            ? 'bg-[#10F5A0] shadow-[0_0_8px_#10F5A0]'
+                            : acc.disconnected
+                              ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e]'
+                              : 'bg-zinc-600'
                         }`}
                       />
                       <p className="text-sm font-medium text-white truncate">
@@ -535,10 +544,18 @@ export function LuaSyncView({
                       </p>
                       <span
                         className={`text-[11px] font-mono ${
-                          online ? 'text-[#10F5A0]' : 'text-zinc-500'
+                          online
+                            ? 'text-[#10F5A0]'
+                            : acc.disconnected
+                              ? 'text-rose-400'
+                              : 'text-zinc-500'
                         }`}
                       >
-                        {online ? 'ออนไลน์' : 'ออฟไลน์'}
+                        {online
+                          ? 'ออนไลน์'
+                          : acc.disconnected
+                            ? `หลุดเกม${acc.disconnectInfo?.errorCode ? ` (Code ${acc.disconnectInfo.errorCode})` : ''}`
+                            : 'ออฟไลน์'}
                       </span>
                       {outdated ? (
                         <span className="px-2 py-0.5 rounded-full bg-amber-400/12 border border-amber-400/35 text-[10px] font-semibold text-amber-300">
