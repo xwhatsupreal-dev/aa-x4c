@@ -118,6 +118,8 @@ function getUnitInitials(name: string): string {
 
 const DEFAULT_GOLD_ICON_ID = '100751534594369';
 const DEFAULT_GEMS_ICON_ID = '71405874061254';
+const DEFAULT_SUMMER_PEARLS_ICON_ID = '128058918644138';
+const DEFAULT_REROLL_TOKEN_ICON_ID = '99186363801156';
 
 function inferItemTier(tier?: string, id?: string, name?: string): string | undefined {
   if (tier && tier.trim()) return tier.trim();
@@ -376,50 +378,109 @@ export function AccountDashboard({
 
   const rerollSummary = useMemo(() => {
     const ex = account.extraStats;
+    const hasBag = account.inventory.length > 0;
     let bagTrait = 0;
     let bagCurse = 0;
     let bagStarRemnants = 0;
+    let bagStarRemnantsLimited = 0;
+    let bagBrokenStars = 0;
     let bagStatCubes = 0;
     let bagPerfectCubes = 0;
-    let traitIconId = account.currencyIcons?.traitReroll;
+
+    let traitIconId = account.currencyIcons?.traitReroll || DEFAULT_REROLL_TOKEN_ICON_ID;
     let curseIconId: string | undefined;
     let starIconId: string | undefined;
+    let starLimitedIconId: string | undefined;
+    let brokenStarIconId: string | undefined;
     let statCubeIconId: string | undefined;
     let perfectCubeIconId: string | undefined;
 
+    let starRemnantItemId = 'star_remnant';
+    let starRemnantLimitedItemId = 'star_remnant_limited';
+    let brokenStarItemId = 'broken_star_limited';
+    let curseItemId = 'sukuna_finger';
+    let statCubeItemId = 'reroll_stat_all';
+    let perfectCubeItemId = 'reroll_stat_specific';
+
     for (const it of account.inventory) {
       if (it.kind === 'unit') continue;
-      const hay = `${it.id} ${it.name}`.toLowerCase();
-      if (hay.includes('trait') && (hay.includes('reroll') || hay.includes('token'))) {
-        bagTrait += it.qty;
-        if (!traitIconId && it.iconId) traitIconId = it.iconId;
-      } else if (hay.includes('curse') && (hay.includes('reroll') || hay.includes('token'))) {
-        bagCurse += it.qty;
-        if (!curseIconId && it.iconId) curseIconId = it.iconId;
-      } else if (hay.includes('star_remnant') || hay.includes('star remnant')) {
+      const idLow = it.id.toLowerCase();
+      const hay = `${idLow} ${it.name.toLowerCase()}`;
+
+      if (
+        idLow === 'star_remnant_limited' ||
+        ((hay.includes('star_remnant') || hay.includes('star remnant')) && hay.includes('limited'))
+      ) {
+        bagStarRemnantsLimited += it.qty;
+        starRemnantLimitedItemId = it.id;
+        if (!starLimitedIconId && it.iconId) starLimitedIconId = it.iconId;
+      } else if (
+        idLow === 'star_remnant' ||
+        hay.includes('star_remnant') ||
+        hay.includes('star remnant') ||
+        idLow === 'remnant'
+      ) {
         bagStarRemnants += it.qty;
+        starRemnantItemId = it.id;
         if (!starIconId && it.iconId) starIconId = it.iconId;
-      } else if (hay.includes('perfect_stat_cube') || hay.includes('perfect stat cube')) {
+      } else if (idLow.includes('broken_star') || hay.includes('broken star')) {
+        bagBrokenStars += it.qty;
+        brokenStarItemId = it.id;
+        if (!brokenStarIconId && it.iconId) brokenStarIconId = it.iconId;
+      } else if (
+        idLow === 'reroll_stat_specific' ||
+        (hay.includes('perfect') && (hay.includes('stat_cube') || hay.includes('stat cube') || hay.includes('cube')))
+      ) {
         bagPerfectCubes += it.qty;
+        perfectCubeItemId = it.id;
         if (!perfectCubeIconId && it.iconId) perfectCubeIconId = it.iconId;
-      } else if (hay.includes('stat_cube') || hay.includes('stat cube')) {
+      } else if (
+        idLow === 'reroll_stat_all' ||
+        hay.includes('stat_cube') ||
+        hay.includes('stat cube')
+      ) {
         bagStatCubes += it.qty;
+        statCubeItemId = it.id;
         if (!statCubeIconId && it.iconId) statCubeIconId = it.iconId;
+      } else if (
+        (hay.includes('trait') && (hay.includes('reroll') || hay.includes('token'))) ||
+        hay.includes('reroll_token') ||
+        hay.includes('reroll token')
+      ) {
+        bagTrait += it.qty;
+        if (it.iconId) traitIconId = it.iconId;
+      } else if (
+        idLow.includes('sukuna_finger') ||
+        (hay.includes('curse') && (hay.includes('reroll') || hay.includes('token')))
+      ) {
+        bagCurse += it.qty;
+        curseItemId = it.id;
+        if (!curseIconId && it.iconId) curseIconId = it.iconId;
       }
     }
 
     return {
       traitTokens: Math.max(ex?.traitTokens ?? 0, bagTrait),
+      starRemnants: hasBag ? bagStarRemnants : (ex?.starRemnants ?? 0),
+      starRemnantsLimited: hasBag ? bagStarRemnantsLimited : (ex?.starRemnantsLimited ?? 0),
+      brokenStars: hasBag ? bagBrokenStars : (ex?.brokenStars ?? 0),
       curseTokens: Math.max(ex?.curseTokens ?? 0, bagCurse),
-      starRemnants: Math.max(ex?.starRemnants ?? 0, bagStarRemnants),
-      statCubes: Math.max(ex?.statCubes ?? 0, bagStatCubes),
-      perfectStatCubes: Math.max(ex?.perfectStatCubes ?? 0, bagPerfectCubes),
+      statCubes: hasBag ? bagStatCubes : (ex?.statCubes ?? 0),
+      perfectStatCubes: hasBag ? bagPerfectCubes : (ex?.perfectStatCubes ?? 0),
       rebirthTokens: ex?.rebirthTokens ?? 0,
       traitIconId,
       curseIconId,
       starIconId,
+      starLimitedIconId,
+      brokenStarIconId,
       statCubeIconId,
       perfectCubeIconId,
+      starRemnantItemId,
+      starRemnantLimitedItemId,
+      brokenStarItemId,
+      curseItemId,
+      statCubeItemId,
+      perfectCubeItemId,
     };
   }, [account.extraStats, account.inventory, account.currencyIcons?.traitReroll]);
 
@@ -427,6 +488,9 @@ export function AccountDashboard({
     const items: Array<{
       key: string;
       label: string;
+      fullName: string;
+      thumbKind: 'currency' | 'item';
+      thumbName: string;
       itemId: string;
       value: number;
       accent: string;
@@ -435,18 +499,11 @@ export function AccountDashboard({
       iconKind?: 'pearl' | 'reroll' | 'sparkle';
     }> = [
       {
-        key: 'summer_pearls',
-        label: 'Summer Pearls',
-        itemId: 'summer_pearls',
-        value: summerPearlsVal,
-        accent: '#67e8f9',
-        iconId: account.currencyIcons?.summerPearls,
-        alwaysShow: true,
-        iconKind: 'pearl',
-      },
-      {
         key: 'trait_reroll',
-        label: 'Trait Reroll',
+        label: 'Reroll Token',
+        fullName: 'Trait Reroll Token (1 เหรียญ = 1 โรลทุกแรงก์)',
+        thumbKind: 'currency',
+        thumbName: 'Reroll Token',
         itemId: 'trait_reroll_tokens',
         value: rerollSummary.traitTokens,
         accent: '#10F5A0',
@@ -455,9 +512,51 @@ export function AccountDashboard({
         iconKind: 'reroll',
       },
       {
+        key: 'star_remnant',
+        label: 'Star Remnant',
+        fullName: 'Star Remnant (ถาวร)',
+        thumbKind: 'item',
+        thumbName: 'Star Remnant',
+        itemId: rerollSummary.starRemnantItemId,
+        value: rerollSummary.starRemnants,
+        accent: '#fbbf24',
+        iconId: rerollSummary.starIconId,
+        alwaysShow: true,
+        iconKind: 'sparkle',
+      },
+      {
+        key: 'star_remnant_limited',
+        label: 'Remnant (Ltd)',
+        fullName: 'Star Remnant (Limited)',
+        thumbKind: 'item',
+        thumbName: 'Star Remnant (Limited)',
+        itemId: rerollSummary.starRemnantLimitedItemId,
+        value: rerollSummary.starRemnantsLimited,
+        accent: '#f59e0b',
+        iconId: rerollSummary.starLimitedIconId,
+        alwaysShow: true,
+        iconKind: 'sparkle',
+      },
+      {
+        key: 'summer_pearls',
+        label: 'Summer Pearls',
+        fullName: 'Summer Pearls',
+        thumbKind: 'currency',
+        thumbName: 'Summer Pearls',
+        itemId: 'summer_pearls',
+        value: summerPearlsVal,
+        accent: '#67e8f9',
+        iconId: account.currencyIcons?.summerPearls || DEFAULT_SUMMER_PEARLS_ICON_ID,
+        alwaysShow: true,
+        iconKind: 'pearl',
+      },
+      {
         key: 'curse_reroll',
         label: 'Curse Reroll',
-        itemId: 'curse_reroll_tokens',
+        fullName: 'Cursed Token (Curse Reroll)',
+        thumbKind: 'item',
+        thumbName: 'Cursed Finger',
+        itemId: rerollSummary.curseItemId,
         value: rerollSummary.curseTokens,
         accent: '#c084fc',
         iconId: rerollSummary.curseIconId,
@@ -465,18 +564,12 @@ export function AccountDashboard({
         iconKind: 'reroll',
       },
       {
-        key: 'star_remnant',
-        label: 'Star Remnant',
-        itemId: 'star_remnant',
-        value: rerollSummary.starRemnants,
-        accent: '#fbbf24',
-        iconId: rerollSummary.starIconId,
-        iconKind: 'sparkle',
-      },
-      {
         key: 'stat_cube',
         label: 'Stat Cube',
-        itemId: 'stat_cube',
+        fullName: 'Stat Cube (รีสเตตัสทั้งหมด)',
+        thumbKind: 'item',
+        thumbName: 'Stat Cube',
+        itemId: rerollSummary.statCubeItemId,
         value: rerollSummary.statCubes,
         accent: '#60a5fa',
         iconId: rerollSummary.statCubeIconId,
@@ -485,15 +578,33 @@ export function AccountDashboard({
       {
         key: 'perfect_cube',
         label: 'Perfect Cube',
-        itemId: 'perfect_stat_cube',
+        fullName: 'Perfect Stat Cube (รีสเตตัสเลือกช่อง)',
+        thumbKind: 'item',
+        thumbName: 'Perfect Stat Cube',
+        itemId: rerollSummary.perfectCubeItemId,
         value: rerollSummary.perfectStatCubes,
         accent: '#f472b6',
         iconId: rerollSummary.perfectCubeIconId,
         iconKind: 'sparkle',
       },
       {
+        key: 'broken_star',
+        label: 'Broken Star',
+        fullName: 'Broken Star (Limited · กดใช้ได้ 20x Star Remnant Limited)',
+        thumbKind: 'item',
+        thumbName: 'Broken Star (Limited)',
+        itemId: rerollSummary.brokenStarItemId,
+        value: rerollSummary.brokenStars,
+        accent: '#fde047',
+        iconId: rerollSummary.brokenStarIconId,
+        iconKind: 'sparkle',
+      },
+      {
         key: 'rebirth',
         label: 'Rebirth',
+        fullName: 'Rebirth Token',
+        thumbKind: 'currency',
+        thumbName: 'Rebirth Token',
         itemId: 'rebirth_tokens',
         value: rerollSummary.rebirthTokens,
         accent: '#fb7185',
@@ -613,7 +724,7 @@ export function AccountDashboard({
   const handleCopyTradeSummary = async () => {
     const lines: string[] = [
       `=== เช็คของ Anime Adventures: ${account.displayName} (@${account.username}) ===`,
-      `Gold: ${formatNumber(account.gold)} | Gems: ${formatNumber(account.gems)} | Summer Pearls: ${formatNumber(summerPearlsVal)} | Trait Reroll: ${formatNumber(rerollSummary.traitTokens)}${rerollSummary.curseTokens > 0 ? ` | Curse Reroll: ${formatNumber(rerollSummary.curseTokens)}` : ''}${account.level ? ` | Lv.${account.level}` : ''}`,
+      `Gold: ${formatNumber(account.gold)} | Gems: ${formatNumber(account.gems)} | Summer Pearls: ${formatNumber(summerPearlsVal)} | Reroll Token: ${formatNumber(rerollSummary.traitTokens)} | Star Remnant: ${formatNumber(rerollSummary.starRemnants)} | Remnant (Ltd): ${formatNumber(rerollSummary.starRemnantsLimited)}${rerollSummary.curseTokens > 0 ? ` | Curse Reroll: ${formatNumber(rerollSummary.curseTokens)}` : ''}${account.level ? ` | Lv.${account.level}` : ''}`,
       '',
       `[ทีม 6 ตัว]`,
       ...account.equipped.map((u, i) => {
@@ -989,41 +1100,34 @@ export function AccountDashboard({
           </div>
         </div>
 
-        {/* Compact Extra Stats Strip (Summer Pearls + Rerolls with real in-game icons) */}
+        {/* Compact Extra Stats Strip (3 Trait Rerolls + Summer Pearls + Curse & Stat Rerolls with real icons) */}
         {extraStatPills.length > 0 && (
           <div className="border-t border-white/[0.08] px-4 py-2.5 grid grid-cols-3 gap-x-2 gap-y-2.5 bg-white/[0.015]">
             {extraStatPills.map((stat) => (
-              <div key={stat.key} className="min-w-0">
-                <span className="flex items-center gap-1 text-[10px] text-zinc-400">
-                  <span className="w-3.5 h-3.5 shrink-0 flex items-center justify-center">
-                    {stat.iconId ? (
-                      <RobloxAssetThumb
-                        kind="currency"
-                        name={stat.label}
-                        itemId={stat.itemId}
-                        assetId={stat.iconId}
-                        alt={stat.label}
-                        className="w-3.5 h-3.5 object-contain"
-                        fallback={
-                          stat.iconKind === 'reroll' ? (
-                            <Dices size={11} style={{ color: stat.accent }} />
-                          ) : (
-                            <Sparkles size={11} style={{ color: stat.accent }} />
-                          )
-                        }
-                      />
-                    ) : stat.iconKind === 'reroll' ? (
-                      <Dices size={11} style={{ color: stat.accent }} />
-                    ) : (
-                      <Sparkles size={11} style={{ color: stat.accent }} />
-                    )}
+              <div key={stat.key} className="min-w-0" title={`${stat.fullName}: ${formatNumber(stat.value)}`}>
+                <span className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+                  <span className="w-4 h-4 shrink-0 flex items-center justify-center">
+                    <RobloxAssetThumb
+                      kind={stat.thumbKind}
+                      name={stat.thumbName}
+                      itemId={stat.itemId}
+                      assetId={stat.iconId}
+                      alt={stat.label}
+                      className="w-4 h-4 object-contain"
+                      fallback={
+                        stat.iconKind === 'reroll' ? (
+                          <Dices size={12} style={{ color: stat.accent }} />
+                        ) : (
+                          <Sparkles size={12} style={{ color: stat.accent }} />
+                        )
+                      }
+                    />
                   </span>
                   <span className="truncate">{stat.label}</span>
                 </span>
                 <span
                   className="mt-0.5 block text-xs font-bold font-mono tabular-nums truncate"
                   style={{ color: stat.accent }}
-                  title={`${stat.label}: ${formatNumber(stat.value)}`}
                 >
                   {formatCompact(stat.value)}
                 </span>

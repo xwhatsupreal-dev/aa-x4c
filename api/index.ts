@@ -54,6 +54,8 @@ interface ExtraStats {
   curseTokens?: number;
   traitTokens?: number;
   starRemnants?: number;
+  starRemnantsLimited?: number;
+  brokenStars?: number;
   statCubes?: number;
   perfectStatCubes?: number;
   eventResources?: Record<string, number>;
@@ -236,7 +238,7 @@ interface SyncPayload {
 
 type Req = IncomingMessage & { body?: unknown };
 
-const SCRIPT_VERSION = '2.9.0';
+const SCRIPT_VERSION = '2.9.1';
 const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 15:00 น. (เวลาไทย)';
 
 const RARITY_ORDER: Rarity[] = [
@@ -588,6 +590,8 @@ function sanitizeExtraStats(
   const incTrait = optNum(s.traitTokens);
   const incCurse = optNum(s.curseTokens);
   const incStarRem = optNum(s.starRemnants);
+  const incStarRemLtd = optNum(s.starRemnantsLimited);
+  const incBrokenStars = optNum(s.brokenStars);
   const incStatCubes = optNum(s.statCubes);
   const incPerfCubes = optNum(s.perfectStatCubes);
   return {
@@ -609,6 +613,18 @@ function sanitizeExtraStats(
       preserveBagDerived && (!incStarRem || incStarRem === 0) && (fallback?.starRemnants ?? 0) > 0
         ? fallback?.starRemnants
         : incStarRem ?? fallback?.starRemnants,
+    starRemnantsLimited:
+      preserveBagDerived &&
+      (!incStarRemLtd || incStarRemLtd === 0) &&
+      (fallback?.starRemnantsLimited ?? 0) > 0
+        ? fallback?.starRemnantsLimited
+        : incStarRemLtd ?? fallback?.starRemnantsLimited,
+    brokenStars:
+      preserveBagDerived &&
+      (!incBrokenStars || incBrokenStars === 0) &&
+      (fallback?.brokenStars ?? 0) > 0
+        ? fallback?.brokenStars
+        : incBrokenStars ?? fallback?.brokenStars,
     statCubes:
       preserveBagDerived && (!incStatCubes || incStatCubes === 0) && (fallback?.statCubes ?? 0) > 0
         ? fallback?.statCubes
@@ -956,9 +972,29 @@ const CURRENCY_FILE_MAP: Record<string, string[]> = {
   pearls: ['File:Summer Pearls.png', 'File:Pearls.png', 'File:Pearl.png'],
   trophies: ['File:Trophies.png'],
   trophy: ['File:Trophies.png'],
-  trait_tokens: ['File:Star Remnant.png', 'File:Remnant.png'],
-  trait_reroll: ['File:Star Remnant.png', 'File:Remnant.png'],
-  curse_tokens: ['File:Cursed Womb.png', 'File:Curse Token.png'],
+  trait_tokens: ['File:Reroll Token.png', 'File:TraitsReroll.png'],
+  trait_reroll: ['File:Reroll Token.png', 'File:TraitsReroll.png'],
+  trait_reroll_tokens: ['File:Reroll Token.png', 'File:TraitsReroll.png'],
+  reroll_token: ['File:Reroll Token.png', 'File:TraitsReroll.png'],
+  'reroll token': ['File:Reroll Token.png', 'File:TraitsReroll.png'],
+  'trait reroll': ['File:Reroll Token.png', 'File:TraitsReroll.png'],
+  star_remnant: ['File:StarRemnant.png', 'File:Star Remnant.png'],
+  star_remnant_limited: ['File:StarRemnant.png', 'File:Star Remnant.png'],
+  'star remnant': ['File:StarRemnant.png', 'File:Star Remnant.png'],
+  broken_star: ['File:Broken Star.png', 'File:StarRemnant.png', 'File:Star Remnant.png'],
+  broken_star_limited: ['File:Broken Star.png', 'File:StarRemnant.png', 'File:Star Remnant.png'],
+  curse_tokens: ['File:Cursed Finger.png', 'File:Cursed Womb.png'],
+  curse_reroll_tokens: ['File:Cursed Finger.png', 'File:Cursed Womb.png'],
+  'curse reroll': ['File:Cursed Finger.png', 'File:Cursed Womb.png'],
+  'cursed token': ['File:Cursed Finger.png', 'File:Cursed Womb.png'],
+  sukuna_finger: ['File:Cursed Finger.png', 'File:Cursed Womb.png'],
+  sukuna_finger_permanent: ['File:Cursed Finger.png', 'File:Cursed Womb.png'],
+  stat_cube: ['File:Stat Cube.png'],
+  reroll_stat_all: ['File:Stat Cube.png'],
+  'stat cube': ['File:Stat Cube.png'],
+  perfect_stat_cube: ['File:Perfect Stat Cube.png', 'File:PerfectStatCube.png'],
+  reroll_stat_specific: ['File:Perfect Stat Cube.png', 'File:PerfectStatCube.png'],
+  'perfect stat cube': ['File:Perfect Stat Cube.png', 'File:PerfectStatCube.png'],
   rebirth_tokens: ['File:Rebirth Token.png'],
   resource: ['File:Summer Pearls.png', 'File:Pearls.png', 'File:Holiday Stars.png', 'File:Candies.png'],
 };
@@ -1164,9 +1200,17 @@ async function resolveAaImageUrl(opts: {
               ? ['File:Gold.png']
               : lowerName.includes('trophy')
                 ? ['File:Trophies.png']
-                : lowerName.includes('trait') || lowerName.includes('remnant')
-                  ? ['File:Star Remnant.png']
-                  : []);
+                : lowerName.includes('curse') || lowerId.includes('curse') || lowerId.includes('sukuna_finger')
+                  ? ['File:Cursed Finger.png', 'File:Cursed Womb.png']
+                  : lowerName.includes('remnant') || lowerId.includes('remnant') || lowerName.includes('broken star') || lowerId.includes('broken_star')
+                    ? ['File:StarRemnant.png', 'File:Star Remnant.png']
+                    : lowerName.includes('perfect') && lowerName.includes('cube')
+                      ? ['File:Perfect Stat Cube.png', 'File:PerfectStatCube.png']
+                      : lowerName.includes('stat cube') || lowerId.includes('reroll_stat_all')
+                        ? ['File:Stat Cube.png']
+                        : lowerName.includes('trait') || lowerName.includes('reroll') || lowerId.includes('trait_reroll')
+                          ? ['File:Reroll Token.png', 'File:TraitsReroll.png']
+                          : []);
       const candidates = uniqueStrings([
         ...preset,
         ...(name ? [`File:${name}.png`] : []),
@@ -1231,10 +1275,24 @@ async function resolveAaImageUrl(opts: {
         resolved = await queryWikiFiles(fileCandidates, 256);
       }
     } else {
+      const combinedItem = `${id} ${name}`.toLowerCase();
+      const ITEM_WIKI_ALIAS_MAP: Array<[RegExp, string[]]> = [
+        [/sukuna[\s_-]*finger|cursed[\s_-]*token|curse[\s_-]*reroll/i, ['File:Cursed Finger.png', 'File:Cursed Womb.png']],
+        [/reroll[\s_-]*stat[\s_-]*specific|perfect[\s_-]*stat[\s_-]*cube/i, ['File:Perfect Stat Cube.png', 'File:PerfectStatCube.png']],
+        [/reroll[\s_-]*stat[\s_-]*all|stat[\s_-]*cube/i, ['File:Stat Cube.png']],
+        [/star[\s_-]*remnant/i, ['File:StarRemnant.png', 'File:Star Remnant.png']],
+        [/broken[\s_-]*star/i, ['File:Broken Star.png', 'File:StarRemnant.png', 'File:Star Remnant.png']],
+        [/trait[\s_-]*reroll|reroll[\s_-]*token/i, ['File:Reroll Token.png', 'File:TraitsReroll.png']],
+      ];
+      const aliasFiles: string[] = [];
+      for (const [re, files] of ITEM_WIKI_ALIAS_MAP) {
+        if (re.test(combinedItem)) aliasFiles.push(...files);
+      }
       const itemNames = uniqueStrings([name, baseName, idTitle]);
-      const fileCandidates = uniqueStrings(
-        itemNames.flatMap((s) => [`File:${s}.png`, `File:${s}.webp`])
-      );
+      const fileCandidates = uniqueStrings([
+        ...aliasFiles,
+        ...itemNames.flatMap((s) => [`File:${s}.png`, `File:${s}.webp`]),
+      ]);
       resolved = await queryWikiFiles(fileCandidates, 220);
       if (!resolved && name) resolved = await searchWikiFileStrict(name, 220);
       if (!resolved && baseName && baseName !== name) resolved = await searchWikiFileStrict(baseName, 220);
@@ -2777,6 +2835,9 @@ function Hub.ScanAndUploadGameAssets(force)
 			if Hub.CurrencyIcons.gems then
 				enqueue(Hub.CurrencyIcons.gems, "currency", "Gems", 72, true)
 			end
+			if Hub.CurrencyIcons.traitReroll then
+				enqueue(Hub.CurrencyIcons.traitReroll, "currency", "Reroll Token", 72, true)
+			end
 			-- 2) รูปด่าน + ไอคอนของรางวัลในประวัติจบด่านล่าสุด
 			for i = 1, math.min(#Hub.Rewards, 24) do
 				local rw = Hub.Rewards[i]
@@ -2787,7 +2848,15 @@ function Hub.ScanAndUploadGameAssets(force)
 			for resName, resUri in pairs(RES_ICON) do
 				enqueue(resUri, "currency", resName, 72, true)
 			end
-			-- 4) ไอคอนไอเทมในกระเป๋า (ให้ความสำคัญ Portals / Charms ก่อน)
+			-- 4) ไอคอนไอเทมสาย Reroll (Star Remnant, Limited, Broken Star, Stat Cube, Cursed Token) + ไอเทมในกระเป๋า
+			for _, it in ipairs(Hub.Bag or {}) do
+				if it.img then
+					local hay = (tostring(it.id or "") .. " " .. tostring(it.name or "")):lower()
+					if hay:find("remnant", 1, true) or hay:find("broken_star", 1, true) or hay:find("reroll", 1, true) or hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("sukuna_finger", 1, true) or hay:find("cursed token", 1, true) then
+						enqueue(it.img, "item", it.name or it.id, 72, true)
+					end
+				end
+			end
 			local itemCount = 0
 			for _, it in ipairs(Hub.Bag or {}) do
 				if it.img and itemCount < 16 then
@@ -3390,36 +3459,39 @@ local function buildPayloadJson()
 		end
 	end
 
-	-- นับไอเทมสาย Reroll จากกระเป๋า (Star Remnant, Stat Cube, Perfect Stat Cube, Trait/Curse Reroll Token)
+	-- นับไอเทมสาย Reroll ครบทุกแบบ (Trait Reroll Token, Star Remnant, Star Remnant Limited, Broken Star, Cursed Token, Stat Cube, Perfect Stat Cube)
 	local traitTokens = safeNum(stats.trait_reroll_tokens)
 	local curseTokens = safeNum(stats.curse_reroll_tokens)
-	local starRemnants, statCubes, perfectStatCubes = 0, 0, 0
+	local starRemnants, starRemnantsLimited, brokenStars = 0, 0, 0
+	local statCubes, perfectStatCubes = 0, 0
 	local bagTraitTokens, bagCurseTokens = 0, 0
 	for _, it in ipairs(bagList) do
 		local q = safeNum(it.qty)
 		if q > 0 and it.kind ~= "unit" then
-			local hay = (tostring(it.id or "") .. " " .. tostring(it.name or "")):lower()
-			if hay:find("star_remnant", 1, true) or hay:find("star remnant", 1, true) or hay == "remnant" then
+			local idLow = tostring(it.id or ""):lower()
+			local hay = (idLow .. " " .. tostring(it.name or "")):lower()
+			if idLow == "star_remnant_limited" or ((hay:find("star_remnant", 1, true) or hay:find("star remnant", 1, true)) and hay:find("limited", 1, true)) then
+				starRemnantsLimited = starRemnantsLimited + q
+			elseif idLow == "star_remnant" or hay:find("star_remnant", 1, true) or hay:find("star remnant", 1, true) or hay == "remnant" then
 				starRemnants = starRemnants + q
-				if not Hub.CurrencyIcons.traitReroll and it.img then
-					Hub.CurrencyIcons.traitReroll = it.img
-				end
-			elseif hay:find("perfect", 1, true) and (hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("cube", 1, true)) then
+			elseif idLow:find("broken_star", 1, true) or hay:find("broken star", 1, true) then
+				brokenStars = brokenStars + q
+			elseif idLow == "reroll_stat_specific" or (hay:find("perfect", 1, true) and (hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("cube", 1, true))) then
 				perfectStatCubes = perfectStatCubes + q
-			elseif hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("stat_reroll", 1, true) then
+			elseif idLow == "reroll_stat_all" or hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("stat_reroll", 1, true) then
 				statCubes = statCubes + q
 			elseif hay:find("trait_reroll", 1, true) or hay:find("trait reroll", 1, true) or hay:find("reroll_token", 1, true) or hay:find("reroll token", 1, true) then
 				bagTraitTokens = bagTraitTokens + q
 				if not Hub.CurrencyIcons.traitReroll and it.img then
 					Hub.CurrencyIcons.traitReroll = it.img
 				end
-			elseif hay:find("curse_reroll", 1, true) or hay:find("curse reroll", 1, true) or hay:find("curse_token", 1, true) or hay:find("curse token", 1, true) then
+			elseif idLow:find("sukuna_finger", 1, true) or hay:find("curse_reroll", 1, true) or hay:find("curse reroll", 1, true) or hay:find("curse_token", 1, true) or hay:find("curse token", 1, true) or hay:find("cursed token", 1, true) then
 				bagCurseTokens = bagCurseTokens + q
 			end
 		end
 	end
 	if traitTokens <= 0 and bagTraitTokens > 0 then traitTokens = bagTraitTokens end
-	if curseTokens <= 0 and bagCurseTokens > 0 then curseTokens = bagCurseTokens end
+	if bagCurseTokens > curseTokens then curseTokens = bagCurseTokens end
 	if not Hub.CurrencyIcons.traitReroll and RES_ICON._Trait then
 		Hub.CurrencyIcons.traitReroll = RES_ICON._Trait
 	end
@@ -3456,6 +3528,8 @@ local function buildPayloadJson()
 			curseTokens = curseTokens,
 			traitTokens = traitTokens,
 			starRemnants = starRemnants,
+			starRemnantsLimited = starRemnantsLimited,
+			brokenStars = brokenStars,
 			statCubes = statCubes,
 			perfectStatCubes = perfectStatCubes,
 			eventResources = hasEventRes and eventResOut or nil,

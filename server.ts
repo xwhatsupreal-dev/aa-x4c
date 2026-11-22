@@ -297,6 +297,8 @@ function sanitizeExtraStats(
   const incTrait = optNum(s.traitTokens);
   const incCurse = optNum(s.curseTokens);
   const incStarRem = optNum(s.starRemnants);
+  const incStarRemLtd = optNum(s.starRemnantsLimited);
+  const incBrokenStars = optNum(s.brokenStars);
   const incStatCubes = optNum(s.statCubes);
   const incPerfCubes = optNum(s.perfectStatCubes);
   return {
@@ -318,6 +320,18 @@ function sanitizeExtraStats(
       preserveBagDerived && (!incStarRem || incStarRem === 0) && (fallback?.starRemnants ?? 0) > 0
         ? fallback?.starRemnants
         : incStarRem ?? fallback?.starRemnants,
+    starRemnantsLimited:
+      preserveBagDerived &&
+      (!incStarRemLtd || incStarRemLtd === 0) &&
+      (fallback?.starRemnantsLimited ?? 0) > 0
+        ? fallback?.starRemnantsLimited
+        : incStarRemLtd ?? fallback?.starRemnantsLimited,
+    brokenStars:
+      preserveBagDerived &&
+      (!incBrokenStars || incBrokenStars === 0) &&
+      (fallback?.brokenStars ?? 0) > 0
+        ? fallback?.brokenStars
+        : incBrokenStars ?? fallback?.brokenStars,
     statCubes:
       preserveBagDerived && (!incStatCubes || incStatCubes === 0) && (fallback?.statCubes ?? 0) > 0
         ? fallback?.statCubes

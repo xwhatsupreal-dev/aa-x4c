@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.9.0';
-export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 15:00 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.9.1';
+export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 17:15 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,15 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.9.1',
+    updatedAt: '22 พ.ย. 2569 · 17:15 น. (เวลาไทย)',
+    highlights: [
+      'แยกแสดง Trait Reroll ครบทั้ง 3 แบบ: Reroll Token, Star Remnant และ Star Remnant (Limited) พร้อม Broken Star (Limited), Cursed Token, Stat Cube และ Perfect Stat Cube',
+      'แก้ไขรูปไอคอน Reroll ทุกตัวบนหน้าข้อมูลให้ดึงรูปจริงจากเกมและ AA Wiki ครบทุกช่อง (ไม่แสดงเป็นไอคอนลูกเต๋า/ดาวเปล่า)',
+      'สแกนและอัปโหลดรูปไอคอนไอเทมสาย Reroll จากในเกมเข้าคิวความสำคัญสูงโดยอัตโนมัติ',
+    ],
+  },
   {
     version: '2.9.0',
     updatedAt: '22 พ.ย. 2569 · 15:00 น. (เวลาไทย)',

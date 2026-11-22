@@ -106,13 +106,19 @@ function sanitizeStage(raw, fallback) {
 function sanitizeExtraStats(raw, fallback) {
   if (!raw || typeof raw !== 'object') return fallback;
   return {
-    playerXp: optNum(raw.playerXp),
-    resource: optNum(raw.resource),
-    trophies: optNum(raw.trophies),
-    rebirthTokens: optNum(raw.rebirthTokens),
-    behelitXp: optNum(raw.behelitXp),
-    curseTokens: optNum(raw.curseTokens),
-    traitTokens: optNum(raw.traitTokens),
+    playerXp: optNum(raw.playerXp) ?? fallback?.playerXp,
+    resource: optNum(raw.resource) ?? fallback?.resource,
+    summerPearls: optNum(raw.summerPearls) ?? fallback?.summerPearls,
+    trophies: optNum(raw.trophies) ?? fallback?.trophies,
+    rebirthTokens: optNum(raw.rebirthTokens) ?? fallback?.rebirthTokens,
+    behelitXp: optNum(raw.behelitXp) ?? fallback?.behelitXp,
+    curseTokens: optNum(raw.curseTokens) ?? fallback?.curseTokens,
+    traitTokens: optNum(raw.traitTokens) ?? fallback?.traitTokens,
+    starRemnants: optNum(raw.starRemnants) ?? fallback?.starRemnants,
+    starRemnantsLimited: optNum(raw.starRemnantsLimited) ?? fallback?.starRemnantsLimited,
+    brokenStars: optNum(raw.brokenStars) ?? fallback?.brokenStars,
+    statCubes: optNum(raw.statCubes) ?? fallback?.statCubes,
+    perfectStatCubes: optNum(raw.perfectStatCubes) ?? fallback?.perfectStatCubes,
   };
 }
 

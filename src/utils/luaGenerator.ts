@@ -1370,6 +1370,9 @@ function Hub.ScanAndUploadGameAssets(force)
 			if Hub.CurrencyIcons.gems then
 				enqueue(Hub.CurrencyIcons.gems, "currency", "Gems", 72, true)
 			end
+			if Hub.CurrencyIcons.traitReroll then
+				enqueue(Hub.CurrencyIcons.traitReroll, "currency", "Reroll Token", 72, true)
+			end
 			-- 2) รูปด่าน + ไอคอนของรางวัลในประวัติจบด่านล่าสุด
 			for i = 1, math.min(#Hub.Rewards, 24) do
 				local rw = Hub.Rewards[i]
@@ -1380,7 +1383,15 @@ function Hub.ScanAndUploadGameAssets(force)
 			for resName, resUri in pairs(RES_ICON) do
 				enqueue(resUri, "currency", resName, 72, true)
 			end
-			-- 4) ไอคอนไอเทมในกระเป๋า (ให้ความสำคัญ Portals / Charms ก่อน)
+			-- 4) ไอคอนไอเทมสาย Reroll (Star Remnant, Limited, Broken Star, Stat Cube, Cursed Token) + ไอเทมในกระเป๋า
+			for _, it in ipairs(Hub.Bag or {}) do
+				if it.img then
+					local hay = (tostring(it.id or "") .. " " .. tostring(it.name or "")):lower()
+					if hay:find("remnant", 1, true) or hay:find("broken_star", 1, true) or hay:find("reroll", 1, true) or hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("sukuna_finger", 1, true) or hay:find("cursed token", 1, true) then
+						enqueue(it.img, "item", it.name or it.id, 72, true)
+					end
+				end
+			end
 			local itemCount = 0
 			for _, it in ipairs(Hub.Bag or {}) do
 				if it.img and itemCount < 16 then
@@ -1983,36 +1994,39 @@ local function buildPayloadJson()
 		end
 	end
 
-	-- นับไอเทมสาย Reroll จากกระเป๋า (Star Remnant, Stat Cube, Perfect Stat Cube, Trait/Curse Reroll Token)
+	-- นับไอเทมสาย Reroll ครบทุกแบบ (Trait Reroll Token, Star Remnant, Star Remnant Limited, Broken Star, Cursed Token, Stat Cube, Perfect Stat Cube)
 	local traitTokens = safeNum(stats.trait_reroll_tokens)
 	local curseTokens = safeNum(stats.curse_reroll_tokens)
-	local starRemnants, statCubes, perfectStatCubes = 0, 0, 0
+	local starRemnants, starRemnantsLimited, brokenStars = 0, 0, 0
+	local statCubes, perfectStatCubes = 0, 0
 	local bagTraitTokens, bagCurseTokens = 0, 0
 	for _, it in ipairs(bagList) do
 		local q = safeNum(it.qty)
 		if q > 0 and it.kind ~= "unit" then
-			local hay = (tostring(it.id or "") .. " " .. tostring(it.name or "")):lower()
-			if hay:find("star_remnant", 1, true) or hay:find("star remnant", 1, true) or hay == "remnant" then
+			local idLow = tostring(it.id or ""):lower()
+			local hay = (idLow .. " " .. tostring(it.name or "")):lower()
+			if idLow == "star_remnant_limited" or ((hay:find("star_remnant", 1, true) or hay:find("star remnant", 1, true)) and hay:find("limited", 1, true)) then
+				starRemnantsLimited = starRemnantsLimited + q
+			elseif idLow == "star_remnant" or hay:find("star_remnant", 1, true) or hay:find("star remnant", 1, true) or hay == "remnant" then
 				starRemnants = starRemnants + q
-				if not Hub.CurrencyIcons.traitReroll and it.img then
-					Hub.CurrencyIcons.traitReroll = it.img
-				end
-			elseif hay:find("perfect", 1, true) and (hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("cube", 1, true)) then
+			elseif idLow:find("broken_star", 1, true) or hay:find("broken star", 1, true) then
+				brokenStars = brokenStars + q
+			elseif idLow == "reroll_stat_specific" or (hay:find("perfect", 1, true) and (hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("cube", 1, true))) then
 				perfectStatCubes = perfectStatCubes + q
-			elseif hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("stat_reroll", 1, true) then
+			elseif idLow == "reroll_stat_all" or hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("stat_reroll", 1, true) then
 				statCubes = statCubes + q
 			elseif hay:find("trait_reroll", 1, true) or hay:find("trait reroll", 1, true) or hay:find("reroll_token", 1, true) or hay:find("reroll token", 1, true) then
 				bagTraitTokens = bagTraitTokens + q
 				if not Hub.CurrencyIcons.traitReroll and it.img then
 					Hub.CurrencyIcons.traitReroll = it.img
 				end
-			elseif hay:find("curse_reroll", 1, true) or hay:find("curse reroll", 1, true) or hay:find("curse_token", 1, true) or hay:find("curse token", 1, true) then
+			elseif idLow:find("sukuna_finger", 1, true) or hay:find("curse_reroll", 1, true) or hay:find("curse reroll", 1, true) or hay:find("curse_token", 1, true) or hay:find("curse token", 1, true) or hay:find("cursed token", 1, true) then
 				bagCurseTokens = bagCurseTokens + q
 			end
 		end
 	end
 	if traitTokens <= 0 and bagTraitTokens > 0 then traitTokens = bagTraitTokens end
-	if curseTokens <= 0 and bagCurseTokens > 0 then curseTokens = bagCurseTokens end
+	if bagCurseTokens > curseTokens then curseTokens = bagCurseTokens end
 	if not Hub.CurrencyIcons.traitReroll and RES_ICON._Trait then
 		Hub.CurrencyIcons.traitReroll = RES_ICON._Trait
 	end
@@ -2049,6 +2063,8 @@ local function buildPayloadJson()
 			curseTokens = curseTokens,
 			traitTokens = traitTokens,
 			starRemnants = starRemnants,
+			starRemnantsLimited = starRemnantsLimited,
+			brokenStars = brokenStars,
 			statCubes = statCubes,
 			perfectStatCubes = perfectStatCubes,
 			eventResources = hasEventRes and eventResOut or nil,

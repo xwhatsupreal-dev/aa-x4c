@@ -49,6 +49,8 @@ export interface ExtraStats {
   curseTokens?: number;
   traitTokens?: number;
   starRemnants?: number;
+  starRemnantsLimited?: number;
+  brokenStars?: number;
   statCubes?: number;
   perfectStatCubes?: number;
   eventResources?: Record<string, number>;
