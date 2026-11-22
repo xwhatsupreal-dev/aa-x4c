@@ -363,28 +363,10 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     }
   }
 
-  const finalRewards = [...newlyAdded, ...mergedRewards]
-    .sort((a, b) => b.ts - a.ts)
-    .slice(0, 200);
-
-  const totals: Record<string, RewardTotal> = {};
-  for (const r of finalRewards) {
-    const key = `${r.kind}|${r.id}|${r.tier || ''}`;
-    if (!totals[key]) {
-      totals[key] = {
-        kind: r.kind,
-        id: r.id,
-        name: r.name,
-        rarity: r.rarity,
-        qty: 0,
-        iconId: r.iconId,
-        tier: r.tier,
-      };
-    } else if (!totals[key].iconId && r.iconId) {
-      totals[key].iconId = r.iconId;
-    }
-    totals[key].qty += r.qty;
-  }
+  const MAX_DROP_HISTORY_RUNS = 15;
+  const combinedRewards = [...newlyAdded, ...mergedRewards].sort((a, b) => b.ts - a.ts);
+  const finalRewards = pruneRewardsToMaxRuns(combinedRewards, MAX_DROP_HISTORY_RUNS);
+  const totals = recomputeTotals(finalRewards);
 
   const uniqueCount =
     typeof payload.uniqueCount === 'number'
@@ -432,6 +414,66 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
         : existing?.syncIntervalSec,
     source: 'lua',
   };
+}
+
+const MAX_DROP_HISTORY_RUNS_LIMIT = 15;
+
+function pruneRewardsToMaxRuns(
+  rewards: RewardEntry[],
+  maxRuns = MAX_DROP_HISTORY_RUNS_LIMIT
+): RewardEntry[] {
+  const sorted = [...rewards].sort((a, b) => b.ts - a.ts);
+  const allowedRunIds = new Set<string>();
+  let runCount = 0;
+  let lastLegacy: { src: string; ts: number } | null = null;
+  const kept: RewardEntry[] = [];
+
+  for (const r of sorted) {
+    if (r.runId) {
+      if (allowedRunIds.has(r.runId)) {
+        kept.push(r);
+      } else if (runCount < maxRuns) {
+        allowedRunIds.add(r.runId);
+        runCount += 1;
+        kept.push(r);
+      }
+      continue;
+    }
+    const sameLegacy =
+      lastLegacy !== null &&
+      lastLegacy.src === r.src &&
+      Math.abs(lastLegacy.ts - r.ts) <= 15_000;
+    if (sameLegacy) {
+      kept.push(r);
+    } else if (runCount < maxRuns) {
+      runCount += 1;
+      lastLegacy = { src: r.src, ts: r.ts };
+      kept.push(r);
+    }
+  }
+  return kept;
+}
+
+function recomputeTotals(rewards: RewardEntry[]): Record<string, RewardTotal> {
+  const totals: Record<string, RewardTotal> = {};
+  for (const r of rewards) {
+    const key = `${r.kind}|${r.id}|${r.tier || ''}`;
+    if (!totals[key]) {
+      totals[key] = {
+        kind: r.kind,
+        id: r.id,
+        name: r.name,
+        rarity: r.rarity,
+        qty: 0,
+        iconId: r.iconId,
+        tier: r.tier,
+      };
+    } else if (!totals[key].iconId && r.iconId) {
+      totals[key].iconId = r.iconId;
+    }
+    totals[key].qty += r.qty;
+  }
+  return totals;
 }
 
 async function startServer() {
@@ -733,7 +775,15 @@ async function startServer() {
       return;
     }
     const room = store.rooms[syncKey] || {};
-    const accounts = Object.values(room).sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
+    const accounts = Object.values(room)
+      .map((acc) => {
+        const pruned = pruneRewardsToMaxRuns(acc.rewards || [], MAX_DROP_HISTORY_RUNS_LIMIT);
+        if (pruned.length !== (acc.rewards?.length ?? 0)) {
+          return { ...acc, rewards: pruned, totals: recomputeTotals(pruned) };
+        }
+        return acc;
+      })
+      .sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
     res.json({
       syncKey,
       accounts,
@@ -813,16 +863,19 @@ async function startServer() {
     const tempUsername = body.username.trim();
     const accountId = tempUsername.toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'player';
     const existing = store.rooms[syncKey][accountId];
-    const prevRewardCount = existing?.rewards.length ?? 0;
+    const prevSigs = new Set(
+      (existing?.rewards || []).map(
+        (r) => `${r.runId || r.t}|${r.kind}|${r.id}|${r.tier || ''}|${r.qty}|${r.src}`
+      )
+    );
 
     const updated = buildSnapshotFromPayload(body, existing);
     store.rooms[syncKey][updated.accountId] = updated;
     schedulePersist();
 
-    const addedRewards =
-      updated.rewards.length > prevRewardCount
-        ? updated.rewards.slice(0, updated.rewards.length - prevRewardCount)
-        : [];
+    const addedRewards = updated.rewards.filter(
+      (r) => !prevSigs.has(`${r.runId || r.t}|${r.kind}|${r.id}|${r.tier || ''}|${r.qty}|${r.src}`)
+    );
 
     broadcastRoomUpdate(syncKey, 'sync', {
       account: updated,

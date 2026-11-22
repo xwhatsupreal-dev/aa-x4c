@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.7.1';
-export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 02:00 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.8.0';
+export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 09:30 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,22 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.8.0',
+    updatedAt: '22 พ.ย. 2569 · 09:30 น. (เวลาไทย)',
+    highlights: [
+      'เลิกใช้การเดา diff และสแกน ResultsUI — เปลี่ยนมาอ่านรางวัลด่านจาก RemoteEvent จริงของเกม 100% (game_finished, show_unit_and_item_rewards, show_drop_message, show_drop_message_custom) ตามต้นฉบับ 2K v10',
+      'รวมของรางวัล (Gold, Gems, XP, Summer Pearls, Token, Charm/Portal พร้อม Tier และยูนิต) ส่งขึ้นเว็บทันทีเมื่อจบด่าน ไม่มีค่าเพี้ยนและไม่แจ้งกวนระหว่างด่าน',
+      'รองรับการอ่าน Tier ของ Charm (จาก field tier) และ Portal (จาก tier/rarity) ครบถ้วนพร้อมเก็บประวัติสูงสุด 15 รายการล่าสุด',
+    ],
+  },
+  {
+    version: '2.7.2',
+    updatedAt: '22 พ.ย. 2569 · 02:20 น. (เวลาไทย)',
+    highlights: [
+      'จำกัดประวัติของดรอปไว้ไม่เกิน 15 รายการ (รอบดรอปล่าสุด) รายการเก่าที่เกินจะถูกลบออกอัตโนมัติทั้งในเกม, บนเว็บ และในฐานข้อมูล ช่วยประหยัดพื้นที่และโหลดไวขึ้น',
+    ],
+  },
   {
     version: '2.7.1',
     updatedAt: '22 พ.ย. 2569 · 02:00 น. (เวลาไทย)',

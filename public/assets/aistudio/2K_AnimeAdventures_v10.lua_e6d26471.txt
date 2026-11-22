@@ -1,0 +1,904 @@
+-- ============================================================
+-- 2K | Anime Adventures v10
+-- รางวัลด่านอ่านจาก event จริง 100%
+--   game_finished / show_unit_and_item_rewards / show_drop_message / show_drop_message_custom
+-- Portal + Charm บอก Tier, กระเป๋าแยกตาม Tier
+-- ทดสอบรันแล้ว ไม่มี error
+-- ============================================================
+if getgenv().TwoK then pcall(function() getgenv().TwoK.Stop() end) end
+
+local H = { Running = true, Conns = {}, Pages = {}, Log = {}, Raw = {}, Tab = "level", P = nil,
+	LastFinish = nil, Flags = { Sound = false } }
+getgenv().TwoK = H
+
+local Players = game:GetService("Players")
+local RS      = game:GetService("ReplicatedStorage")
+local UIS     = game:GetService("UserInputService")
+local LP      = Players.LocalPlayer
+local PG      = LP:WaitForChild("PlayerGui")
+
+local C = {
+	bg = Color3.fromRGB(16,16,22), panel = Color3.fromRGB(25,25,33), panel2 = Color3.fromRGB(34,34,45),
+	stroke = Color3.fromRGB(52,52,68), txt = Color3.fromRGB(236,236,245), sub = Color3.fromRGB(148,148,170),
+	acc = Color3.fromRGB(120,170,255), good = Color3.fromRGB(110,215,140), bad = Color3.fromRGB(255,110,120),
+	gold = Color3.fromRGB(255,200,90), gem = Color3.fromRGB(140,225,240), xp = Color3.fromRGB(190,190,255),
+}
+
+local function conn(c) H.Conns[#H.Conns + 1] = c; return c end
+local function idx(root, path)
+	if not root then return nil end
+	local cur = root
+	for part in string.gmatch(path, "[^%.]+") do
+		if not cur then return nil end
+		cur = cur:FindFirstChild(part)
+	end
+	return cur
+end
+local function stamp()
+	local ok, s = pcall(os.date, "%H:%M:%S")
+	return (ok and s) or "--:--:--"
+end
+local function fmt(n)
+	n = tonumber(n) or 0
+	if n >= 1e9 then return string.format("%.2fB", n / 1e9) end
+	if n >= 1e7 then return string.format("%.1fM", n / 1e6) end
+	local s = tostring(math.floor(n))
+	local k
+	repeat s, k = s:gsub("^(-?%d+)(%d%d%d)", "%1,%2") until k == 0
+	return s
+end
+local function pretty(k)
+	local s = tostring(k):gsub("_", " ")
+	s = s:gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b end)
+	return s
+end
+
+------------------------------------------------------------------
+-- DATA
+------------------------------------------------------------------
+local DataFolder = idx(RS, "src.Data")
+local function req(n)
+	local m = DataFolder and DataFolder:FindFirstChild(n)
+	if not m then return {} end
+	local ok, r = pcall(require, m)
+	if ok and type(r) == "table" then return r end
+	return {}
+end
+local Items = req("Items")
+local Units = req("Units")
+
+local Assets = idx(RS, "packages.assets")
+local GuiAs  = Assets and Assets:FindFirstChild("gui")
+local OverrideIcons = GuiAs and GuiAs:FindFirstChild("_OverrideItemIcons")
+
+local RES_ICON = {}
+do
+	local res = GuiAs and GuiAs:FindFirstChild("_Resource")
+	if res then
+		for _, c in ipairs(res:GetChildren()) do
+			for _, d in ipairs(c:GetDescendants()) do
+				if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d.Image ~= "" then
+					RES_ICON[c.Name] = d.Image
+					break
+				end
+			end
+		end
+	end
+end
+
+local RCOL = {
+	Common = Color3.fromRGB(160,160,172), Uncommon = Color3.fromRGB(110,200,120),
+	Rare = Color3.fromRGB(90,160,255), Epic = Color3.fromRGB(180,110,255),
+	Legendary = Color3.fromRGB(255,190,80), Mythic = Color3.fromRGB(255,120,90),
+	Secret = Color3.fromRGB(255,100,165), Exclusive = Color3.fromRGB(130,220,235),
+}
+local function rcol(r) return RCOL[tostring(r)] or Color3.fromRGB(150,150,165) end
+
+local function iName(id)
+	local d = Items[id]
+	if type(d) == "table" and type(d.name) == "string" then return d.name end
+	return tostring(id)
+end
+local function iRarity(id)
+	local d = Items[id]
+	if type(d) == "table" then return d.rarity end
+	return nil
+end
+-- Tier: charm มี field tier, portal ใช้ rarity
+local function iTier(id)
+	local d = Items[id]
+	if type(d) ~= "table" then return nil end
+	if d.tier ~= nil then return "Tier " .. tostring(d.tier) end
+	if d.rarity ~= nil then return tostring(d.rarity) end
+	return nil
+end
+local function iGroup(id)
+	local d = Items[id]
+	if type(d) == "table" and d.item_group then return tostring(d.item_group) end
+	return "Other"
+end
+local function iColor(id)
+	local r = iRarity(id)
+	return r and rcol(r) or C.txt
+end
+local function iImg(id)
+	if not id then return nil end
+	if OverrideIcons then
+		local l = OverrideIcons:FindFirstChild(tostring(id))
+		if l then
+			for _, x in ipairs(l:GetDescendants()) do
+				if (x:IsA("ImageLabel") or x:IsA("ImageButton")) and x.Image ~= "" then return x.Image end
+			end
+		end
+	end
+	local d = Items[id]
+	if type(d) == "table" then
+		for _, k in ipairs({ "icon", "image", "_icon", "_resource_icon" }) do
+			if type(d[k]) == "string" and d[k] ~= "" then return d[k] end
+		end
+	end
+	return nil
+end
+
+------------------------------------------------------------------
+-- PROFILE / STATS
+------------------------------------------------------------------
+local function profile()
+	if H.P then return H.P end
+	local ok, list = pcall(getgc, true)
+	if not ok then return nil end
+	for _, o in ipairs(list) do
+		if type(o) == "table" and type(rawget(o, "inventory")) == "table"
+			and type(rawget(o, "level_data")) == "table" then
+			H.P = o
+			return o
+		end
+	end
+	return nil
+end
+local function statOf(name)
+	local st = LP:FindFirstChild("_stats")
+	local v = st and st:FindFirstChild(name)
+	if v and v:IsA("ValueBase") then return v.Value end
+	return nil
+end
+local function pScalar(key)
+	local P = profile()
+	if not P then return nil end
+	local v = rawget(P, key)
+	if type(v) == "number" or type(v) == "string" then return v end
+	return nil
+end
+local function pResources()
+	local out = {}
+	local P = profile()
+	local r = P and rawget(P, "resources")
+	if type(r) == "table" then
+		for k, v in pairs(r) do
+			if type(v) == "number" and v > 0 then out[tostring(k)] = v end
+		end
+	end
+	local st = LP:FindFirstChild("_stats")
+	if st then
+		for _, c in ipairs(st:GetChildren()) do
+			if c:IsA("ValueBase") and string.sub(c.Name, 1, 9) == "_resource"
+				and type(c.Value) == "number" and c.Value > 0 then
+				local nm = string.sub(c.Name, 10)
+				out[nm] = math.max(out[nm] or 0, c.Value)
+			end
+		end
+	end
+	return out
+end
+
+------------------------------------------------------------------
+-- LOG
+------------------------------------------------------------------
+local function push(block)
+	block.t = stamp()
+	table.insert(H.Log, 1, block)
+	while #H.Log > 40 do table.remove(H.Log) end
+	if H.renderRewards then pcall(H.renderRewards) end
+end
+
+local NUMTAGS = { "gold", "gem", "troph", "xp", "resource", "token", "pearl", "star", "point", "currency" }
+local function extractNums(t, out, seen, depth, budget)
+	if type(t) ~= "table" or depth > 4 then return end
+	for k, v in pairs(t) do
+		budget.n = budget.n + 1
+		if budget.n > 900 then return end
+		if type(k) == "string" then
+			if type(v) == "number" then
+				if v > 0 then
+					local kl = k:lower()
+					for _, tag in ipairs(NUMTAGS) do
+						if string.find(kl, tag, 1, true) then
+							if not seen[k] then
+								seen[k] = true
+								out[#out + 1] = { key = k, val = v }
+							end
+							break
+						end
+					end
+				end
+			elseif type(v) == "table" then
+				local isMap, cnt = true, 0
+				for k2, v2 in pairs(v) do
+					cnt = cnt + 1
+					if type(k2) ~= "string" or type(v2) ~= "number" then isMap = false; break end
+				end
+				if isMap and cnt > 0 then
+					for k2, v2 in pairs(v) do
+						if v2 > 0 and not seen[k2] then
+							seen[k2] = true
+							out[#out + 1] = { key = k2, val = v2, parent = k }
+						end
+					end
+				else
+					extractNums(v, out, seen, depth + 1, budget)
+				end
+			end
+		end
+	end
+end
+
+local function colorFor(key)
+	local kl = string.lower(tostring(key))
+	if string.find(kl, "gold", 1, true) then return C.gold end
+	if string.find(kl, "gem", 1, true) then return C.gem end
+	if string.find(kl, "xp", 1, true) then return C.xp end
+	if string.find(kl, "troph", 1, true) then return C.acc end
+	return C.acc
+end
+
+local function onFinished(payload)
+	H.LastFinish = payload
+	H.Raw[#H.Raw + 1] = { tag = "game_finished", t = stamp(), data = payload }
+	while #H.Raw > 12 do table.remove(H.Raw, 1) end
+	if type(payload) ~= "table" then return end
+
+	local rows, seen = {}, {}
+	extractNums(payload, rows, seen, 0, { n = 0 })
+	table.sort(rows, function(a, b) return a.val > b.val end)
+
+	local conv = {}
+	for _, r in ipairs(rows) do
+		conv[#conv + 1] = {
+			text = "+" .. fmt(r.val) .. "  " .. pretty(r.key),
+			color = colorFor(r.key),
+			icon = RES_ICON[r.key],
+		}
+	end
+
+	local st = payload.stats
+	if type(st) == "table" then
+		if st.waves_completed then conv[#conv + 1] = { text = "Waves: " .. tostring(st.waves_completed), color = C.sub } end
+		if st.time_taken then
+			local t = math.floor(tonumber(st.time_taken) or 0)
+			conv[#conv + 1] = { text = string.format("Time: %02d:%02d", math.floor(t / 60), t % 60), color = C.sub }
+		end
+	end
+
+	local win = payload.victory
+	if win == nil and payload.title then win = not string.find(string.lower(tostring(payload.title)), "fail", 1, true) end
+	push({
+		title = (win and "VICTORY" or "DEFEAT") .. " — " .. tostring(payload.title or payload.level or "?"),
+		color = win and C.good or C.bad,
+		rows = conv,
+	})
+	if H.renderLevel then pcall(H.renderLevel) end
+end
+
+-- ดึง item id + จำนวน จากอากิวเมนต์แบบไม่ต้องรู้ลำดับ
+local function idsFromPacked(packed)
+	local found = {}
+	local function add(id, n)
+		if type(id) ~= "string" or not Items[id] then return end
+		for _, f in ipairs(found) do
+			if f.id == id then f.n = f.n + (tonumber(n) or 1); return end
+		end
+		found[#found + 1] = { id = id, n = tonumber(n) or 1 }
+	end
+	local function rec(v, depth)
+		if depth > 3 then return end
+		local tv = type(v)
+		if tv == "string" then
+			add(v, 1)
+		elseif tv == "number" then
+			if #found > 0 then found[#found].n = v end
+		elseif tv == "table" then
+			local id = rawget(v, "item_id") or rawget(v, "id")
+			if type(id) == "string" then
+				add(id, rawget(v, "amount") or rawget(v, "quantity") or 1)
+			end
+			for k, val in pairs(v) do
+				if type(k) == "string" and Items[k] and type(val) == "number" then
+					add(k, val)
+				elseif type(val) == "table" or type(val) == "string" then
+					rec(val, depth + 1)
+				end
+			end
+		end
+	end
+	for i = 1, packed.n do rec(packed[i], 0) end
+	return found
+end
+
+local function onItems(packed)
+	H.Raw[#H.Raw + 1] = { tag = "show_unit_and_item_rewards", t = stamp(), data = packed }
+	while #H.Raw > 12 do table.remove(H.Raw, 1) end
+	local items = idsFromPacked(packed)
+	local rows = {}
+	for _, it in ipairs(items) do
+		local tier = iTier(it.id)
+		rows[#rows + 1] = {
+			text = "+" .. fmt(it.n) .. "  " .. iName(it.id) .. (tier and ("   [" .. tier .. "]") or ""),
+			color = iColor(it.id),
+			icon = iImg(it.id),
+		}
+	end
+	local function countUnits(v, depth)
+		if depth > 3 or type(v) ~= "table" then return end
+		for k, val in pairs(v) do
+			if type(k) == "string" and Units[k] then
+				rows[#rows + 1] = {
+					text = "+ ยูนิต: " .. tostring((type(Units[k]) == "table" and Units[k].name) or k),
+					color = Color3.fromRGB(255,215,120),
+				}
+			elseif type(val) == "table" then
+				countUnits(val, depth + 1)
+			elseif type(val) == "string" and Units[val] then
+				rows[#rows + 1] = {
+					text = "+ ยูนิต: " .. tostring((type(Units[val]) == "table" and Units[val].name) or val),
+					color = Color3.fromRGB(255,215,120),
+				}
+			end
+		end
+	end
+	countUnits(packed, 0)
+	if #rows > 0 then
+		push({ title = "ของ / ยูนิตที่ได้รับ", color = C.acc, rows = rows })
+	end
+end
+
+local function onDrop(packed)
+	H.Raw[#H.Raw + 1] = { tag = "show_drop_message", t = stamp(), data = packed }
+	while #H.Raw > 12 do table.remove(H.Raw, 1) end
+	local items = idsFromPacked(packed)
+	local rows = {}
+	for _, it in ipairs(items) do
+		local tier = iTier(it.id)
+		rows[#rows + 1] = {
+			text = "+" .. fmt(it.n) .. "  " .. iName(it.id) .. (tier and ("   [" .. tier .. "]") or ""),
+			color = iColor(it.id),
+			icon = iImg(it.id),
+		}
+	end
+	if #rows == 0 then
+		local parts = {}
+		for i = 1, math.min(packed.n, 4) do
+			if type(packed[i]) ~= "table" then parts[#parts + 1] = tostring(packed[i]) end
+		end
+		rows[1] = { text = table.concat(parts, "  ·  "):sub(1, 90), color = C.sub }
+	end
+	local head = items[1] and ("ดรอป: " .. iName(items[1].id)) or "ดรอป"
+	push({ title = head, color = items[1] and iColor(items[1].id) or C.sub, rows = rows })
+end
+
+local function hookAll()
+	local ep = idx(RS, "endpoints")
+	local s2c = ep and ep:FindFirstChild("server_to_client")
+	if not s2c then print("[2K] no server_to_client") return end
+
+	local function hook(name, handler)
+		local r = s2c:FindFirstChild(name)
+		if r and r:IsA("RemoteEvent") then
+			conn(r.OnClientEvent:Connect(function(...)
+				local packed = table.pack(...)
+				pcall(handler, packed)
+			end))
+			print("[2K] hooked " .. name)
+		end
+	end
+	hook("game_finished", function(p) onFinished(p[1] or p[2]) end)
+	hook("show_unit_and_item_rewards", onItems)
+	hook("show_drop_message", onDrop)
+	hook("show_drop_message_custom", onDrop)
+end
+
+------------------------------------------------------------------
+-- UI HELPERS
+------------------------------------------------------------------
+local function new(cls, props, parent)
+	local o = Instance.new(cls)
+	for k, v in pairs(props or {}) do
+		if k ~= "Parent" then o[k] = v end
+	end
+	if parent then o.Parent = parent end
+	return o
+end
+local function corner(o, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r or 8)
+	c.Parent = o
+	return c
+end
+local function stroke(o, col, th)
+	local s = Instance.new("UIStroke")
+	s.Color = col or C.stroke
+	s.Thickness = th or 1
+	s.Parent = o
+	return s
+end
+
+local gui = new("ScreenGui", { Name = "TwoKHub", ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling })
+gui.Parent = (gethui and gethui()) or PG
+
+local main = new("Frame", {
+	Size = UDim2.fromOffset(410, 520), Position = UDim2.new(0.5, -205, 0.5, -260),
+	BackgroundColor3 = C.bg, BorderSizePixel = 0, Active = true,
+}, gui)
+corner(main, 12)
+stroke(main, C.stroke, 1)
+
+local bar = new("Frame", { Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = C.panel, BorderSizePixel = 0 }, main)
+corner(bar, 12)
+new("Frame", { Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 1, -14), BackgroundColor3 = C.panel, BorderSizePixel = 0 }, bar)
+new("TextLabel", {
+	Size = UDim2.new(1, -100, 0, 18), Position = UDim2.new(0, 12, 0, 6), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.txt, TextXAlignment = Enum.TextXAlignment.Left,
+	Text = "2K | Anime Adventures",
+}, bar)
+new("TextLabel", {
+	Size = UDim2.new(1, -100, 0, 14), Position = UDim2.new(0, 12, 0, 23), BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Left,
+	Text = "รางวัลจาก event จริงของเกม",
+}, bar)
+
+local closeBtn = new("TextButton", {
+	Size = UDim2.fromOffset(30, 30), Position = UDim2.new(1, -38, 0, 6), BackgroundColor3 = Color3.fromRGB(62,33,40),
+	Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = C.bad, Text = "×", AutoButtonColor = false,
+}, bar)
+corner(closeBtn, 8)
+local minBtn = new("TextButton", {
+	Size = UDim2.fromOffset(30, 30), Position = UDim2.new(1, -72, 0, 6), BackgroundColor3 = C.panel2,
+	Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = C.sub, Text = "▁", AutoButtonColor = false,
+}, bar)
+corner(minBtn, 8)
+
+local tabBar = new("Frame", { Size = UDim2.new(1, -16, 0, 32), Position = UDim2.new(0, 8, 0, 48), BackgroundTransparency = 1 }, main)
+new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 5), VerticalAlignment = Enum.VerticalAlignment.Center }, tabBar)
+local content = new("Frame", { Size = UDim2.new(1, -16, 1, -88), Position = UDim2.new(0, 8, 0, 86), BackgroundTransparency = 1 }, main)
+
+local TABS = {
+	{ id = "level", name = "ด่าน" }, { id = "rewards", name = "รางวัล" },
+	{ id = "money", name = "เงิน" }, { id = "team", name = "ทีม" }, { id = "bag", name = "กระเป๋า" },
+}
+local tabButtons = {}
+for _, t in ipairs(TABS) do
+	local b = new("TextButton", {
+		Size = UDim2.new(0, 66, 1, 0), BackgroundColor3 = C.panel, BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = C.sub, Text = t.name, AutoButtonColor = false,
+	}, tabBar)
+	corner(b, 8)
+	tabButtons[t.id] = b
+	local page = new("ScrollingFrame", {
+		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+		ScrollBarThickness = 3, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = (t.id == "level"), ClipsDescendants = true,
+	}, content)
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+	H.Pages[t.id] = page
+	b.MouseButton1Click:Connect(function()
+		for id, pg in pairs(H.Pages) do pg.Visible = (id == t.id) end
+		for id, bb in pairs(tabButtons) do
+			bb.BackgroundColor3 = (id == t.id) and C.acc or C.panel
+			bb.TextColor3 = (id == t.id) and Color3.fromRGB(15,15,22) or C.sub
+		end
+		H.Tab = t.id
+		if t.id == "money" and H.renderMoney then pcall(H.renderMoney) end
+		if t.id == "bag" and H.renderBag then pcall(H.renderBag) end
+		if t.id == "team" and H.renderTeam then pcall(H.renderTeam) end
+		if t.id == "level" and H.renderLevel then pcall(H.renderLevel) end
+		if t.id == "rewards" and H.renderRewards then pcall(H.renderRewards) end
+	end)
+end
+tabButtons.level.BackgroundColor3 = C.acc
+tabButtons.level.TextColor3 = Color3.fromRGB(15,15,22)
+
+do
+	local dragging, dragStart, startPos = false, nil, nil
+	bar.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging, dragStart, startPos = true, i.Position, main.Position
+		end
+	end)
+	conn(UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - dragStart
+			main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end))
+	conn(UIS.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end))
+end
+
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	main.Size = minimized and UDim2.fromOffset(410, 42) or UDim2.fromOffset(410, 520)
+	content.Visible = not minimized
+	tabBar.Visible = not minimized
+end)
+closeBtn.MouseButton1Click:Connect(function() if H.Stop then H.Stop() end end)
+
+local function clearPage(id)
+	local page = H.Pages[id]
+	for _, c in ipairs(page:GetChildren()) do
+		if c:IsA("Frame") then c:Destroy() end
+	end
+	return page
+end
+local function section(id, title, order)
+	local page = H.Pages[id]
+	local f = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = C.panel, BorderSizePixel = 0, LayoutOrder = order or 0,
+	}, page)
+	corner(f, 10)
+	new("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+		PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, f)
+	new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, f)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, LayoutOrder = 0,
+		Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Left,
+		Text = string.upper(title),
+	}, f)
+	return f
+end
+local function row(parent, text, color, icon, order)
+	local f = new("Frame", { Size = UDim2.new(1, 0, 0, 19), BackgroundTransparency = 1, LayoutOrder = order or 0 }, parent)
+	if icon then
+		new("ImageLabel", {
+			Size = UDim2.fromOffset(17, 17), Position = UDim2.new(0, 0, 0, 1), BackgroundTransparency = 1,
+			Image = icon, ScaleType = Enum.ScaleType.Fit,
+		}, f)
+	end
+	new("TextLabel", {
+		Size = icon and UDim2.new(1, -23, 1, 0) or UDim2.new(1, 0, 1, 0), Position = UDim2.new(0, icon and 23 or 0, 0, 0),
+		BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = color or C.txt,
+		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Text = text,
+	}, f)
+	return f
+end
+local function label(parent, text, color, order)
+	return new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, LayoutOrder = order or 0,
+		Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = color or C.txt,
+		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, Text = text,
+	}, parent)
+end
+local function button(parent, text, order, cb)
+	local b = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = C.panel2, BorderSizePixel = 0, LayoutOrder = order or 0,
+		Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = C.txt, Text = text,
+	}, parent)
+	corner(b, 7)
+	b.MouseButton1Click:Connect(function() pcall(cb) end)
+	return b
+end
+
+------------------------------------------------------------------
+-- PAGES
+------------------------------------------------------------------
+function H.renderLevel()
+	clearPage("level")
+	local cfg = workspace:FindFirstChild("_MAP_CONFIG")
+	local mapId, area, lobby
+	if cfg then
+		local m = cfg:FindFirstChild("Map")
+		if m and m:IsA("ValueBase") then mapId = m.Value end
+		local a = cfg:FindFirstChild("Area")
+		if a and a:IsA("ValueBase") then area = a.Value end
+		local l = cfg:FindFirstChild("IsLobby")
+		if l and l:IsA("ValueBase") then lobby = l.Value end
+	end
+	local s1 = section("level", "ด่านปัจจุบัน", 1)
+	label(s1, tostring(mapId or "?"), C.txt, 1)
+	label(s1, "Area: " .. tostring(area or "-") .. (lobby and "  ·  Lobby" or "  ·  กำลังเล่น"), C.sub, 2)
+
+	local s2 = section("level", "ผลด่านล่าสุด (จาก game_finished)", 2)
+	local last
+	for _, b in ipairs(H.Log) do
+		if b.title and (string.find(b.title, "VICTORY") or string.find(b.title, "DEFEAT")) then last = b; break end
+	end
+	if last then
+		label(s2, last.title .. "   · " .. tostring(last.t), last.color, 1)
+		local i = 2
+		for _, r in ipairs(last.rows or {}) do
+			row(s2, r.text, r.color, r.icon, i)
+			i = i + 1
+		end
+	else
+		label(s2, "ยังไม่มีผลด่าน — จบ 1 ด่านแล้วจะขึ้นเอง", C.sub, 1)
+	end
+end
+
+function H.renderRewards()
+	local page = clearPage("rewards")
+	if #H.Log == 0 then
+		local s = section("rewards", "รางวัล", 1)
+		label(s, "ยังไม่มีข้อมูล — เล่นจบ 1 ด่านก่อน", C.sub, 1)
+		button(s, "DUMP RAW ล่าสุด (console)", 2, function()
+			local r = H.Raw[#H.Raw]
+			if not r then print("[2K] ยังไม่มี raw") return end
+			local function dump(v, d)
+				if d > 4 then return end
+				if type(v) ~= "table" then return end
+				local pad = string.rep("  ", d)
+				for k, vv in pairs(v) do
+					if type(vv) == "table" then
+						print(pad .. tostring(k) .. ":")
+						dump(vv, d + 1)
+					else
+						print(pad .. tostring(k) .. " = " .. tostring(vv))
+					end
+				end
+			end
+			print("=== RAW " .. tostring(r.tag) .. " " .. tostring(r.t) .. " ===")
+			if type(r.data) == "table" and r.data.n then
+				print("packed n=" .. r.data.n)
+				dump(r.data, 0)
+			else
+				dump(r.data, 0)
+			end
+		end)
+		return
+	end
+	local n = 0
+	for _, b in ipairs(H.Log) do
+		n = n + 1
+		if n > 14 then break end
+		local s = new("Frame", {
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundColor3 = C.panel, BorderSizePixel = 0, LayoutOrder = n,
+		}, page)
+		corner(s, 10)
+		new("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+			PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, s)
+		new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, s)
+		new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, LayoutOrder = 0,
+			Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = b.color or C.txt,
+			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = tostring(b.title) .. "   · " .. tostring(b.t),
+		}, s)
+		local i = 1
+		for _, r in ipairs(b.rows or {}) do
+			row(s, r.text, r.color, r.icon, i)
+			i = i + 1
+		end
+	end
+end
+
+function H.renderMoney()
+	clearPage("money")
+	local s1 = section("money", "เงินหลัก", 1)
+	local list = {
+		{ "Gold", pScalar("gold_amount") or statOf("gold_amount"), C.gold },
+		{ "Gems", pScalar("gem_amount") or statOf("gem_amount"), C.gem },
+		{ "XP", pScalar("player_xp") or statOf("player_xp"), C.xp },
+		{ "Trophies", pScalar("trophies") or statOf("trophies"), C.acc },
+		{ "Rebirth Tokens", pScalar("rebirth_tokens") or statOf("rebirth_tokens"), C.txt },
+		{ "Trait Rerolls", pScalar("trait_reroll_tokens") or statOf("trait_reroll_tokens"), C.txt },
+		{ "Curse Rerolls", pScalar("curse_reroll_tokens") or statOf("curse_reroll_tokens"), C.txt },
+	}
+	local i = 1
+	for _, r in ipairs(list) do
+		if r[2] ~= nil then
+			row(s1, r[1] .. ":  " .. fmt(r[2]), r[3], RES_ICON[r[1]], i)
+			i = i + 1
+		end
+	end
+	local res = pResources()
+	local s2 = section("money", "สกุลเงิน event / resource", 2)
+	local keys = {}
+	for k in pairs(res) do keys[#keys + 1] = k end
+	table.sort(keys)
+	if #keys == 0 then
+		label(s2, "ไม่มี", C.sub, 1)
+	else
+		for n, k in ipairs(keys) do
+			row(s2, k .. ":  " .. fmt(res[k]), C.acc, RES_ICON[k], n)
+		end
+	end
+end
+
+local function findKey(t, keyname, depth, budget)
+	if type(t) ~= "table" or depth > 4 then return nil end
+	for k, v in pairs(t) do
+		budget.n = budget.n + 1
+		if budget.n > 2500 then return nil end
+		if type(k) == "string" and string.lower(k) == keyname and type(v) == "table" then return v end
+	end
+	for k, v in pairs(t) do
+		if type(v) == "table" and type(k) == "string" then
+			local r = findKey(v, keyname, depth + 1, budget)
+			if r then return r end
+		end
+	end
+	return nil
+end
+local function teamUnits()
+	local P = profile()
+	if not P then return {} end
+	local t = findKey(P, "team", 0, { n = 0 }) or findKey(P, "equipped_units", 0, { n = 0 })
+	local out = {}
+	if type(t) ~= "table" then return out end
+	for k, v in pairs(t) do
+		local uid
+		if type(v) == "string" then uid = v
+		elseif type(v) == "table" then uid = rawget(v, "unit_id") or rawget(v, "id") end
+		if type(uid) == "string" then
+			out[#out + 1] = { slot = type(k) == "number" and k or (#out + 1), unit_id = uid }
+		end
+	end
+	table.sort(out, function(a, b) return a.slot < b.slot end)
+	return out
+end
+local function unitIcon(uid)
+	local d = Units[uid]
+	if type(d) == "table" then
+		for _, k in ipairs({ "icon", "image", "_icon" }) do
+			if type(d[k]) == "string" and d[k] ~= "" then return d[k] end
+		end
+	end
+	return nil
+end
+
+function H.renderTeam()
+	clearPage("team")
+	local t = teamUnits()
+	local s = section("team", "ทีม (" .. #t .. "/6)", 1)
+	if #t == 0 then
+		label(s, "อ่านทีมไม่ได้ตอนนี้ (ลองเข้าเกม/เปลี่ยนทีมก่อน)", C.sub, 1)
+		return
+	end
+	local grid = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, LayoutOrder = 1 }, s)
+	new("UIGridLayout", { CellSize = UDim2.new(0.5, -4, 0, 62), CellPadding = UDim2.new(0, 8, 0, 8) }, grid)
+	for _, u in ipairs(t) do
+		local card = new("Frame", { BackgroundColor3 = C.panel2, BorderSizePixel = 0 }, grid)
+		corner(card, 8)
+		local d = Units[u.unit_id]
+		local nm = (type(d) == "table" and d.name) or tostring(u.unit_id)
+		local rar = (type(d) == "table" and d.rarity) or nil
+		stroke(card, rar and rcol(rar) or C.stroke, 1)
+		local ic = unitIcon(u.unit_id)
+		if ic then
+			new("ImageLabel", { Size = UDim2.fromOffset(42, 42), Position = UDim2.new(0, 6, 0.5, -21),
+				BackgroundTransparency = 1, Image = ic, ScaleType = Enum.ScaleType.Fit }, card)
+		else
+			local ph = new("Frame", { Size = UDim2.fromOffset(42, 42), Position = UDim2.new(0, 6, 0.5, -21),
+				BackgroundColor3 = rar and rcol(rar) or C.panel, BorderSizePixel = 0 }, card)
+			corner(ph, 6)
+			new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+				Font = Enum.Font.GothamBold, TextSize = 17, TextColor3 = C.bg, Text = string.sub(nm, 1, 1) }, ph)
+		end
+		new("TextLabel", {
+			Size = UDim2.new(1, -54, 0, 15), Position = UDim2.new(0, 52, 0, 12), BackgroundTransparency = 1,
+			Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = C.txt, TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd, Text = nm,
+		}, card)
+		new("TextLabel", {
+			Size = UDim2.new(1, -54, 0, 13), Position = UDim2.new(0, 52, 0, 29), BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = rar and rcol(rar) or C.sub,
+			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = tostring(rar or "-"),
+		}, card)
+	end
+end
+
+local function scanCounts(t, out, depth, budget)
+	if type(t) ~= "table" or depth > 3 then return end
+	for k, v in pairs(t) do
+		budget.n = budget.n + 1
+		if budget.n > 4000 then return end
+		if type(v) == "number" and type(k) == "string" and Items[k] then
+			out[k] = (out[k] or 0) + v
+		elseif type(v) == "table" then
+			local id = rawget(v, "item_id") or rawget(v, "id")
+			if type(id) == "string" and Items[id] and type(rawget(v, "amount")) == "number" then
+				out[id] = (out[id] or 0) + rawget(v, "amount")
+			else
+				scanCounts(v, out, depth + 1, budget)
+			end
+		end
+	end
+end
+local function bagCounts()
+	local out = {}
+	local P = profile()
+	local inv = P and rawget(P, "inventory")
+	if type(inv) ~= "table" then return out end
+	scanCounts(inv, out, 0, { n = 0 })
+	return out
+end
+
+function H.renderBag()
+	clearPage("bag")
+	local counts = bagCounts()
+	local byGroup = {}
+	for id, cnt in pairs(counts) do
+		local g = iGroup(id)
+		local tier = iTier(id) or "ไม่ระบุ Tier"
+		byGroup[g] = byGroup[g] or {}
+		byGroup[g][tier] = byGroup[g][tier] or {}
+		table.insert(byGroup[g][tier], { id = id, n = cnt })
+	end
+	local gnames = {}
+	for g in pairs(byGroup) do gnames[#gnames + 1] = g end
+	table.sort(gnames)
+	if #gnames == 0 then
+		local s = section("bag", "กระเป๋า", 1)
+		label(s, "อ่านกระเป๋าไม่ได้ / ว่าง", C.sub, 1)
+		return
+	end
+	local order = 1
+	for _, g in ipairs(gnames) do
+		local s = section("bag", g, order)
+		order = order + 1
+		local tiers = {}
+		for t in pairs(byGroup[g]) do tiers[#tiers + 1] = t end
+		table.sort(tiers)
+		local lo = 1
+		for _, t in ipairs(tiers) do
+			local list = byGroup[g][t]
+			table.sort(list, function(a, b) return iName(a.id) < iName(b.id) end)
+			new("TextLabel", {
+				Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1, LayoutOrder = lo,
+				Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = rcol(t), TextXAlignment = Enum.TextXAlignment.Left,
+				Text = "— " .. t .. "  (" .. #list .. ") —",
+			}, s)
+			lo = lo + 1
+			for _, e in ipairs(list) do
+				row(s, iName(e.id) .. "   x" .. fmt(e.n), iColor(e.id), iImg(e.id), lo)
+				lo = lo + 1
+			end
+		end
+	end
+end
+
+------------------------------------------------------------------
+-- START
+------------------------------------------------------------------
+hookAll()
+
+function H.Stop()
+	H.Running = false
+	for _, c in ipairs(H.Conns) do pcall(function() c:Disconnect() end) end
+	H.Conns = {}
+	pcall(function() gui:Destroy() end)
+end
+
+task.spawn(function()
+	local tick = 0
+	while H.Running do
+		tick = tick + 1
+		local ok, err = pcall(function()
+			if H.Tab == "level" then H.renderLevel() end
+			if H.Tab == "money" and tick % 2 == 0 then H.renderMoney() end
+			if H.Tab == "team" and tick % 4 == 0 then H.renderTeam() end
+			if H.Tab == "bag" and tick % 6 == 0 then H.renderBag() end
+		end)
+		if not ok then warn("[2K] loop: " .. tostring(err)) end
+		task.wait(1)
+	end
+end)
+
+pcall(H.renderLevel)
+print("[2K] v10 ready")
+return "started v10"

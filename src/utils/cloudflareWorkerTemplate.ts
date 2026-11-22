@@ -179,7 +179,7 @@ function buildSnapshot(payload, existing) {
     : [];
 
   const mergedRewards = existing?.rewards ? [...existing.rewards] : [];
-  const rewardSig = (r) => \`\${r.runId || r.t}|\${r.kind}|\${r.id}|\${r.qty}|\${r.src}\`;
+  const rewardSig = (r) => \`\${r.runId || r.t}|\${r.kind}|\${r.id}|\${r.tier || ''}|\${r.qty}|\${r.src}\`;
   const seenSig = new Set(mergedRewards.map(rewardSig));
   const newlyAdded = [];
 
@@ -191,27 +191,8 @@ function buildSnapshot(payload, existing) {
     }
   }
 
-  const finalRewards = [...newlyAdded, ...mergedRewards]
-    .sort((a, b) => b.ts - a.ts)
-    .slice(0, 200);
-
-  const totals = {};
-  for (const r of finalRewards) {
-    const key = \`\${r.kind}|\${r.id}\`;
-    if (!totals[key]) {
-      totals[key] = {
-        kind: r.kind,
-        id: r.id,
-        name: r.name,
-        rarity: r.rarity,
-        qty: 0,
-        iconId: r.iconId,
-      };
-    } else if (!totals[key].iconId && r.iconId) {
-      totals[key].iconId = r.iconId;
-    }
-    totals[key].qty += r.qty;
-  }
+  const finalRewards = pruneRewardsToMaxRuns([...newlyAdded, ...mergedRewards], 15);
+  const totals = recomputeTotals(finalRewards);
 
   const uniqueCount =
     typeof payload.uniqueCount === 'number'
@@ -259,6 +240,61 @@ function buildSnapshot(payload, existing) {
   };
 }
 
+function pruneRewardsToMaxRuns(rewards, maxRuns = 15) {
+  const sorted = [...(Array.isArray(rewards) ? rewards : [])].sort((a, b) => b.ts - a.ts);
+  const allowedRunIds = new Set();
+  let runCount = 0;
+  let lastLegacy = null;
+  const kept = [];
+
+  for (const r of sorted) {
+    if (r.runId) {
+      if (allowedRunIds.has(r.runId)) {
+        kept.push(r);
+      } else if (runCount < maxRuns) {
+        allowedRunIds.add(r.runId);
+        runCount += 1;
+        kept.push(r);
+      }
+      continue;
+    }
+    const sameLegacy =
+      lastLegacy !== null &&
+      lastLegacy.src === r.src &&
+      Math.abs(lastLegacy.ts - r.ts) <= 15000;
+    if (sameLegacy) {
+      kept.push(r);
+    } else if (runCount < maxRuns) {
+      runCount += 1;
+      lastLegacy = { src: r.src, ts: r.ts };
+      kept.push(r);
+    }
+  }
+  return kept;
+}
+
+function recomputeTotals(rewards) {
+  const totals = {};
+  for (const r of rewards) {
+    const key = \`\${r.kind}|\${r.id}|\${r.tier || ''}\`;
+    if (!totals[key]) {
+      totals[key] = {
+        kind: r.kind,
+        id: r.id,
+        name: r.name,
+        rarity: r.rarity,
+        qty: 0,
+        iconId: r.iconId,
+        tier: r.tier,
+      };
+    } else if (!totals[key].iconId && r.iconId) {
+      totals[key].iconId = r.iconId;
+    }
+    totals[key].qty += r.qty;
+  }
+  return totals;
+}
+
 function randomHex(bytes = 5) {
   const arr = new Uint8Array(bytes);
   crypto.getRandomValues(arr);
@@ -299,7 +335,15 @@ export default {
         if (!syncKey) return jsonResponse({ syncKey: '', accounts: [] });
         const raw = await kv.get(\`room:\${syncKey}\`, 'json');
         const room = raw && typeof raw === 'object' ? raw : {};
-        const accounts = Object.values(room).sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
+        const accounts = Object.values(room)
+          .map((acc) => {
+            const pruned = pruneRewardsToMaxRuns(acc.rewards || [], 15);
+            if (pruned.length !== (acc.rewards?.length || 0)) {
+              return { ...acc, rewards: pruned, totals: recomputeTotals(pruned) };
+            }
+            return acc;
+          })
+          .sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
         return jsonResponse({ syncKey, accounts });
       }
 
@@ -325,14 +369,21 @@ export default {
         const room = raw && typeof raw === 'object' ? raw : {};
         const accountId = body.username.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'player';
         const existing = room[accountId];
-        const prevCount = existing?.rewards?.length || 0;
+        const prevSigs = new Set(
+          (existing?.rewards || []).map(
+            (r) => \`\${r.runId || r.t}|\${r.kind}|\${r.id}|\${r.tier || ''}|\${r.qty}|\${r.src}\`
+          )
+        );
 
         const updated = buildSnapshot(body, existing);
-        const newRewardsCount = Math.max(0, updated.rewards.length - prevCount);
+        const newRewardsCount = updated.rewards.filter(
+          (r) => !prevSigs.has(\`\${r.runId || r.t}|\${r.kind}|\${r.id}|\${r.tier || ''}|\${r.qty}|\${r.src}\`)
+        ).length;
         const minWriteGapMs = Math.min(25000, Math.floor((updated.syncIntervalSec || 120) * 500));
         const unchangedData =
           Boolean(existing) &&
           newRewardsCount === 0 &&
+          (existing.rewards?.length || 0) === updated.rewards.length &&
           existing.gold === updated.gold &&
           existing.gems === updated.gems &&
           existing.level === updated.level &&

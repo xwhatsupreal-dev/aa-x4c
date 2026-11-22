@@ -227,30 +227,14 @@ export function AccountDashboard({
     [account.inventory]
   );
 
-  // Group stage-clear drops by runId (1 completed stage run = 1 bundled row), falling back to 15s window for legacy rows
-  const dropBatches = useMemo<DropBatch[]>(() => {
-    const q = dropSearch.trim().toLowerCase();
-    const filtered = account.rewards.filter((r) => {
-      if (dropRarity !== 'ALL' && r.rarity !== dropRarity) return false;
-      if (q) {
-        const tierText = inferItemTier(r.tier, r.id, r.name)?.toLowerCase() ?? '';
-        return (
-          r.name.toLowerCase().includes(q) ||
-          r.id.toLowerCase().includes(q) ||
-          r.src.toLowerCase().includes(q) ||
-          tierText.includes(q) ||
-          (r.stageName?.toLowerCase().includes(q) ?? false) ||
-          (r.stageWorld?.toLowerCase().includes(q) ?? false) ||
-          (r.stageDifficulty?.toLowerCase().includes(q) ?? false)
-        );
-      }
-      return true;
-    });
+  // Group stage-clear drops by runId (1 completed stage run = 1 bundled row), capped at 15 latest entries
+  const MAX_DROP_HISTORY_RUNS = 15;
 
+  const allDropBatches = useMemo<DropBatch[]>(() => {
     const batches: DropBatch[] = [];
     const runMap = new Map<string, DropBatch>();
 
-    for (const r of filtered) {
+    for (const r of account.rewards) {
       if (r.runId) {
         const existingBatch = runMap.get(r.runId);
         if (existingBatch) {
@@ -264,6 +248,7 @@ export function AccountDashboard({
           }
           continue;
         }
+        if (batches.length >= MAX_DROP_HISTORY_RUNS) continue;
         const info = SOURCE_INFO[r.src] || { label: 'รางวัลจบด่าน', short: 'จบด่าน' };
         const batch: DropBatch = {
           id: `run-${r.runId}`,
@@ -304,6 +289,7 @@ export function AccountDashboard({
           prev.topRarity = r.rarity;
         }
       } else {
+        if (batches.length >= MAX_DROP_HISTORY_RUNS) continue;
         const info = SOURCE_INFO[r.src] || {
           label: r.src || 'ได้รับไอเทม',
           short: 'ดรอป',
@@ -329,8 +315,42 @@ export function AccountDashboard({
         });
       }
     }
-    return batches;
-  }, [account.rewards, dropSearch, dropRarity]);
+    return batches.slice(0, MAX_DROP_HISTORY_RUNS);
+  }, [account.rewards]);
+
+  const dropBatches = useMemo<DropBatch[]>(() => {
+    const q = dropSearch.trim().toLowerCase();
+    if (!q && dropRarity === 'ALL') return allDropBatches;
+    const out: DropBatch[] = [];
+    for (const batch of allDropBatches) {
+      const matched = batch.entries.filter((r) => {
+        if (dropRarity !== 'ALL' && r.rarity !== dropRarity) return false;
+        if (q) {
+          const tierText = inferItemTier(r.tier, r.id, r.name)?.toLowerCase() ?? '';
+          return (
+            r.name.toLowerCase().includes(q) ||
+            r.id.toLowerCase().includes(q) ||
+            r.src.toLowerCase().includes(q) ||
+            tierText.includes(q) ||
+            (r.stageName?.toLowerCase().includes(q) ?? false) ||
+            (r.stageWorld?.toLowerCase().includes(q) ?? false) ||
+            (r.stageDifficulty?.toLowerCase().includes(q) ?? false)
+          );
+        }
+        return true;
+      });
+      if (matched.length > 0) {
+        let topRarity = matched[0].rarity;
+        let totalQty = 0;
+        for (const m of matched) {
+          totalQty += m.qty;
+          if (RARITY_RANK[m.rarity] > RARITY_RANK[topRarity]) topRarity = m.rarity;
+        }
+        out.push({ ...batch, entries: matched, topRarity, totalQty });
+      }
+    }
+    return out;
+  }, [allDropBatches, dropSearch, dropRarity]);
 
   const stage = account.currentStage;
   const summerPearlsVal = useMemo(() => {
@@ -1018,7 +1038,7 @@ export function AccountDashboard({
                   รอบจบด่าน
                 </span>
                 <span className="mt-0.5 block text-2xl font-display font-extrabold leading-none tabular-nums text-white">
-                  {dropBatches.length}
+                  {allDropBatches.length}
                 </span>
               </div>
             </div>
@@ -1123,7 +1143,7 @@ export function AccountDashboard({
                   className={activeTab === 'drops' ? 'text-[#10F5A0]' : 'text-zinc-400'}
                 />
                 <span className="text-base font-bold leading-tight font-mono tabular-nums text-white">
-                  {account.rewards.length}
+                  {allDropBatches.length}
                 </span>
               </span>
               <span
@@ -1145,7 +1165,7 @@ export function AccountDashboard({
               </span>
               <span className="hidden min-w-0 sm:block">
                 <span className="block text-lg font-bold leading-tight font-mono tabular-nums text-white">
-                  {account.rewards.length}
+                  {allDropBatches.length}
                 </span>
                 <span
                   className={`block truncate text-xs ${
@@ -1328,7 +1348,7 @@ export function AccountDashboard({
                   <strong className="text-white font-semibold">
                     {dropBatches.length}
                   </strong>{' '}
-                  รอบดรอป ({account.rewards.length} รายการ)
+                  / {MAX_DROP_HISTORY_RUNS} รายการล่าสุด
                   {account.rewards[0]
                     ? ` · ล่าสุด ${
                         account.rewards[0].ts > 0
@@ -1425,11 +1445,17 @@ export function AccountDashboard({
                     const topMeta = RARITY_META[batch.topRarity];
                     const headlineItem = batch.entries[0];
                     const isStageRun = Boolean(batch.stageName);
+                    const compactWaves = batch.stageWaves
+                      ? batch.stageWaves.replace(/^Waves?\s*Completed:\s*/i, 'Wave ').trim()
+                      : undefined;
+                    const compactTimer = batch.stageTimer
+                      ? batch.stageTimer.replace(/^Total\s*Time:\s*/i, '').trim()
+                      : undefined;
                     const metaParts = [
                       batch.stageWorld,
                       batch.stageDifficulty || batch.stageGamemode,
-                      batch.stageWaves,
-                      batch.stageTimer,
+                      compactWaves,
+                      compactTimer,
                     ].filter(Boolean);
 
                     return (
@@ -1480,7 +1506,7 @@ export function AccountDashboard({
                               : `+${formatNumber(batch.totalQty)}`}
                           </span>
                           <span className="relative z-10 truncate text-[10px] font-bold leading-tight text-white drop-shadow">
-                            {batch.stageTimer || batch.stageWaves || batch.srcShort}
+                            {compactTimer || compactWaves || batch.srcShort}
                           </span>
                         </div>
 
