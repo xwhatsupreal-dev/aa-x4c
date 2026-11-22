@@ -116,6 +116,25 @@ function getUnitInitials(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
+type StageOutcome = 'victory' | 'defeat' | null;
+
+function parseStageOutcome(stageGamemode?: string, stageName?: string): StageOutcome {
+  const combined = `${stageGamemode || ''} ${stageName || ''}`;
+  if (!combined.trim()) return null;
+  if (/\b(defeat|fail|failed|lose|lost)\b|แพ้/i.test(combined)) return 'defeat';
+  if (/\b(victory|win|won|cleared)\b|ชนะ/i.test(combined)) return 'victory';
+  return null;
+}
+
+function cleanGamemodeLabel(stageGamemode?: string): string | undefined {
+  if (!stageGamemode) return undefined;
+  const cleaned = stageGamemode
+    .replace(/^(VICTORY|DEFEAT|WIN|LOSE|FAIL|FAILED)\s*[•·\-|:]\s*/i, '')
+    .replace(/^(VICTORY|DEFEAT|WIN|LOSE|FAIL|FAILED)$/i, '')
+    .trim();
+  return cleaned || undefined;
+}
+
 const DEFAULT_GOLD_ICON_ID = '100751534594369';
 const DEFAULT_GEMS_ICON_ID = '71405874061254';
 const DEFAULT_SUMMER_PEARLS_ICON_ID = '128058918644138';
@@ -362,6 +381,18 @@ export function AccountDashboard({
     }
     return out;
   }, [allDropBatches, dropSearch, dropRarity]);
+
+  const dropOutcomeCounts = useMemo(() => {
+    let wins = 0;
+    let losses = 0;
+    for (const batch of dropBatches) {
+      if (!batch.stageName) continue;
+      const outcome = parseStageOutcome(batch.stageGamemode, batch.stageName);
+      if (outcome === 'victory') wins += 1;
+      else if (outcome === 'defeat') losses += 1;
+    }
+    return { wins, losses };
+  }, [dropBatches]);
 
   const stage = account.currentStage;
   const summerPearlsVal = useMemo(() => {
@@ -1627,18 +1658,33 @@ export function AccountDashboard({
             {/* Context Sub-header & Search */}
             <div className="border-b border-white/[0.07] px-4 py-3 sm:px-5 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs text-zinc-400 tabular-nums">
-                  <strong className="text-white font-semibold">
-                    {dropBatches.length}
-                  </strong>{' '}
-                  / {MAX_DROP_HISTORY_RUNS} รายการล่าสุด
-                  {account.rewards[0]
-                    ? ` · ล่าสุด ${
-                        account.rewards[0].ts > 0
-                          ? `${formatClock(account.rewards[0].ts)} น.`
-                          : account.rewards[0].t
-                      }`
-                    : ''}
+                <span className="text-xs text-zinc-400 tabular-nums flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                  <span>
+                    <strong className="text-white font-semibold">
+                      {dropBatches.length}
+                    </strong>{' '}
+                    / {MAX_DROP_HISTORY_RUNS} รายการล่าสุด
+                  </span>
+                  {(dropOutcomeCounts.wins > 0 || dropOutcomeCounts.losses > 0) && (
+                    <>
+                      <span className="text-zinc-600">·</span>
+                      <span className="text-[#10F5A0] font-semibold">
+                        ชนะ {dropOutcomeCounts.wins}
+                      </span>
+                      <span className="text-zinc-600">/</span>
+                      <span className="text-rose-400 font-semibold">
+                        แพ้ {dropOutcomeCounts.losses}
+                      </span>
+                    </>
+                  )}
+                  {account.rewards[0] && (
+                    <span>
+                      · ล่าสุด{' '}
+                      {account.rewards[0].ts > 0
+                        ? `${formatClock(account.rewards[0].ts)} น.`
+                        : account.rewards[0].t}
+                    </span>
+                  )}
                 </span>
 
                 {!isReadOnly && account.rewards.length > 0 && (
@@ -1728,6 +1774,10 @@ export function AccountDashboard({
                     const topMeta = RARITY_META[batch.topRarity];
                     const headlineItem = batch.entries[0];
                     const isStageRun = Boolean(batch.stageName);
+                    const outcome = isStageRun
+                      ? parseStageOutcome(batch.stageGamemode, batch.stageName)
+                      : null;
+                    const cleanedMode = cleanGamemodeLabel(batch.stageGamemode);
                     const compactWaves = batch.stageWaves
                       ? batch.stageWaves.replace(/^Waves?\s*Completed:\s*/i, 'Wave ').trim()
                       : undefined;
@@ -1736,10 +1786,26 @@ export function AccountDashboard({
                       : undefined;
                     const metaParts = [
                       batch.stageWorld,
-                      batch.stageDifficulty || batch.stageGamemode,
+                      batch.stageDifficulty,
+                      cleanedMode &&
+                      cleanedMode.toLowerCase() !== (batch.stageDifficulty || '').toLowerCase()
+                        ? cleanedMode
+                        : undefined,
                       compactWaves,
                       compactTimer,
                     ].filter(Boolean);
+                    const thumbBorderColor =
+                      outcome === 'defeat'
+                        ? 'rgba(244, 63, 94, 0.45)'
+                        : outcome === 'victory'
+                          ? 'rgba(16, 245, 160, 0.4)'
+                          : topMeta.border;
+                    const thumbBadgeColor =
+                      outcome === 'defeat'
+                        ? '#FDA4AF'
+                        : isStageRun
+                          ? '#10F5A0'
+                          : topMeta.text;
 
                     return (
                       <li
@@ -1750,8 +1816,10 @@ export function AccountDashboard({
                         <div
                           className="relative row-span-1 flex flex-col justify-between aspect-[16/10] w-full self-start overflow-hidden rounded-xl p-2 sm:row-span-2 sm:aspect-auto sm:min-h-[5.25rem] sm:self-stretch"
                           style={{
-                            background: `linear-gradient(145deg, ${topMeta.hex}24, rgba(16, 20, 24, 0.96) 75%)`,
-                            boxShadow: `inset 0 0 0 1px ${topMeta.border}`,
+                            background: `linear-gradient(145deg, ${
+                              outcome === 'defeat' ? '#f43f5e24' : `${topMeta.hex}24`
+                            }, rgba(16, 20, 24, 0.96) 75%)`,
+                            boxShadow: `inset 0 0 0 1px ${thumbBorderColor}`,
                           }}
                         >
                           {(batch.stageName || batch.stageWorld || batch.stageMap || batch.stageImageId) ? (
@@ -1782,7 +1850,7 @@ export function AccountDashboard({
                           )}
                           <span
                             className="relative z-10 inline-flex self-start rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-mono font-bold tabular-nums"
-                            style={{ color: isStageRun ? '#10F5A0' : topMeta.text }}
+                            style={{ color: thumbBadgeColor }}
                           >
                             {batch.entries.length > 1
                               ? `${batch.entries.length} รายการ`
@@ -1793,12 +1861,22 @@ export function AccountDashboard({
                           </span>
                         </div>
 
-                        {/* Top Row: Stage Name + Right-Aligned Clock */}
+                        {/* Top Row: Win/Loss Badge + Stage Name + Right-Aligned Clock */}
                         <div className="min-w-0">
-                          <div className="flex items-baseline gap-x-2">
-                            <span className="shrink-0 text-sm font-extrabold text-[#10F5A0]">
-                              {isStageRun ? 'จบด่าน' : 'ได้รับ'}
-                            </span>
+                          <div className="flex items-center gap-x-2">
+                            {outcome === 'victory' ? (
+                              <span className="shrink-0 inline-flex items-center rounded-md bg-[#10F5A0]/15 border border-[#10F5A0]/40 px-1.5 py-0.5 text-[11px] font-extrabold leading-none text-[#10F5A0]">
+                                ชนะ
+                              </span>
+                            ) : outcome === 'defeat' ? (
+                              <span className="shrink-0 inline-flex items-center rounded-md bg-rose-500/15 border border-rose-500/45 px-1.5 py-0.5 text-[11px] font-extrabold leading-none text-rose-300">
+                                แพ้
+                              </span>
+                            ) : (
+                              <span className="shrink-0 text-sm font-extrabold text-[#10F5A0]">
+                                {isStageRun ? 'จบด่าน' : 'ได้รับ'}
+                              </span>
+                            )}
                             <span className="min-w-0 truncate text-sm font-semibold text-zinc-100">
                               {isStageRun
                                 ? batch.stageName

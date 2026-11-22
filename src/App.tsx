@@ -169,10 +169,18 @@ export default function App() {
           .map((item) => `${item.name} +${item.qty}`)
           .join(' · ');
         const extra = list.length > 3 ? ` (+${list.length - 3})` : '';
+        const modeText = `${first.stageGamemode || ''} ${first.stageName || ''}`;
+        const isDefeat = /\b(defeat|fail|failed|lose|lost)\b|แพ้/i.test(modeText);
+        const isVictory = !isDefeat && /\b(victory|win|won|cleared)\b|ชนะ/i.test(modeText);
+        const prefix = isDefeat
+          ? 'จบด่าน (แพ้)'
+          : isVictory
+            ? 'จบด่าน (ชนะ)'
+            : 'จบด่าน';
         pushSystemToast(
-          `จบด่าน: ${first.stageName || 'Stage Clear'}`,
+          `${prefix}: ${first.stageName || 'Stage Clear'}`,
           `${summary}${extra}`,
-          true
+          !isDefeat
         );
       }
 

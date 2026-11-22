@@ -2290,11 +2290,65 @@ local function mapCurrencyMeta(rawKey, stageName, stageId, stageWorld)
 	return raw, prettyKey(raw), "Mythic", RES_ICON[raw] or resolveCurrencyIcon(raw)
 end
 
--- 2K v10: ดึงค่าตัวเลขรางวัลจริงจากตาราง payload ของ game_finished
+-- 2K v10: ดึงค่าตัวเลขรางวัลจริงจากตาราง payload ของ game_finished (กรองค่า XP สะสมของยูนิต/ไอดี/แบทเทิลพาสออก)
 local NUMTAGS = { "gold", "gem", "troph", "xp", "resource", "token", "pearl", "star", "point", "currency" }
-local STAT_SKIP = { stats = true, waves_completed = true, time_taken = true, total_damage = true, damage = true, kills = true, takedowns = true, wave = true }
-local function extractNums(t, out, seen, depth, budget)
+local STAT_SKIP = {
+	stats = true, waves_completed = true, time_taken = true, total_damage = true,
+	damage = true, kills = true, takedowns = true, wave = true,
+	units = true, unit_xp = true, unit_levels = true, unit_gains = true, unit_progress = true,
+	equipped = true, equipped_units = true, team = true, loadout = true,
+	battlepass = true, bp = true, bp_xp = true, battlepass_xp = true, pass_xp = true,
+	progress = true, level_progress = true, xp_bar = true, player_progress = true,
+	old_xp = true, new_xp = true, total_xp = true, current_xp = true, max_xp = true,
+	prev_xp = true, next_xp = true, before_xp = true, after_xp = true,
+	required_xp = true, needed_xp = true, start_xp = true, end_xp = true,
+	level = true, old_level = true, new_level = true, player_level = true, max_level = true,
+	stars = true, rating = true, score = true, dps = true, place_count = true,
+	best_time = true, fastest_time = true, high_score = true,
+}
+local BAD_CONTAINER_SUBS = { "unit", "battlepass", "progress", "stat", "damage", "kill", "equip", "team", "level", "leaderboard", "history", "record", "before", "after", "old", "new" }
+local CUMULATIVE_XP_SUBS = { "total", "current", "old", "new", "max", "before", "after", "prev", "next", "req", "need", "start", "end", "unit", "bp", "pass", "bar", "cumul", "lifetime", "all" }
+local REWARD_MAP_NAMES = { rewards = true, reward = true, currencies = true, currency_rewards = true, resources = true, drops = true }
+
+local function isBadContainerKey(kl)
+	if STAT_SKIP[kl] then return true end
+	for _, sub in ipairs(BAD_CONTAINER_SUBS) do
+		if string.find(kl, sub, 1, true) then return true end
+	end
+	return false
+end
+
+local function isCumulativeXpKey(kl, parentKl)
+	if not string.find(kl, "xp", 1, true) and not string.find(kl, "exp", 1, true) then
+		return false
+	end
+	for _, sub in ipairs(CUMULATIVE_XP_SUBS) do
+		if string.find(kl, sub, 1, true) then return true end
+	end
+	if type(parentKl) == "string" and parentKl ~= "" then
+		if string.find(parentKl, "unit", 1, true)
+			or string.find(parentKl, "bp", 1, true)
+			or string.find(parentKl, "pass", 1, true)
+			or string.find(parentKl, "bar", 1, true)
+			or string.find(parentKl, "progress", 1, true)
+			or string.find(parentKl, "level", 1, true)
+			or string.find(parentKl, "player", 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function matchesNumTag(kl)
+	for _, tag in ipairs(NUMTAGS) do
+		if string.find(kl, tag, 1, true) then return true end
+	end
+	return false
+end
+
+local function extractNums(t, out, seen, depth, budget, parentKey)
 	if type(t) ~= "table" or depth > 4 then return end
+	local parentKl = type(parentKey) == "string" and parentKey:lower() or ""
 	for k, v in pairs(t) do
 		budget.n = budget.n + 1
 		if budget.n > 900 then return end
@@ -2302,33 +2356,33 @@ local function extractNums(t, out, seen, depth, budget)
 			local kl = k:lower()
 			if not STAT_SKIP[kl] then
 				if type(v) == "number" then
-					if v > 0 and not Items[k] and not Units[k] then
-						for _, tag in ipairs(NUMTAGS) do
-							if string.find(kl, tag, 1, true) then
-								if not seen[k] then
-									seen[k] = true
-									out[#out + 1] = { key = k, val = math.floor(v) }
-								end
-								break
+					if v > 0 and not Items[k] and not Units[k] and not isCumulativeXpKey(kl, parentKl) then
+						if matchesNumTag(kl) or REWARD_MAP_NAMES[parentKl] then
+							if not seen[k] then
+								seen[k] = true
+								out[#out + 1] = { key = k, val = math.floor(v), parent = parentKey }
 							end
 						end
 					end
-				elseif type(v) == "table" then
+				elseif type(v) == "table" and not isBadContainerKey(kl) then
 					local isMap, cnt = true, 0
 					for k2, v2 in pairs(v) do
 						cnt = cnt + 1
 						if type(k2) ~= "string" or type(v2) ~= "number" then isMap = false; break end
 					end
 					if isMap and cnt > 0 then
+						local allowAnyMapKey = REWARD_MAP_NAMES[kl] == true
 						for k2, v2 in pairs(v) do
 							local k2l = k2:lower()
-							if v2 > 0 and not seen[k2] and not STAT_SKIP[k2l] and not Items[k2] and not Units[k2] then
-								seen[k2] = true
-								out[#out + 1] = { key = k2, val = math.floor(v2), parent = k }
+							if v2 > 0 and not seen[k2] and not STAT_SKIP[k2l] and not Items[k2] and not Units[k2] and not isCumulativeXpKey(k2l, kl) then
+								if allowAnyMapKey or matchesNumTag(k2l) then
+									seen[k2] = true
+									out[#out + 1] = { key = k2, val = math.floor(v2), parent = k }
+								end
 							end
 						end
 					else
-						extractNums(v, out, seen, depth + 1, budget)
+						extractNums(v, out, seen, depth + 1, budget, k)
 					end
 				end
 			end
@@ -2594,9 +2648,14 @@ local function onGameFinished(payload)
 		end
 
 		local win = payload.victory
+		if win == nil and payload.win ~= nil then win = payload.win end
+		if win == nil and payload.won ~= nil then win = payload.won end
 		if win == nil and payload.title then
-			win = not string.find(string.lower(tostring(payload.title)), "fail", 1, true)
-				and not string.find(string.lower(tostring(payload.title)), "defeat", 1, true)
+			local tl = string.lower(tostring(payload.title))
+			win = not string.find(tl, "fail", 1, true)
+				and not string.find(tl, "defeat", 1, true)
+				and not string.find(tl, "lose", 1, true)
+				and not string.find(tl, "lost", 1, true)
 		end
 		local resultTag = (win == false) and "DEFEAT" or "VICTORY"
 
@@ -2615,7 +2674,12 @@ local function onGameFinished(payload)
 			if q <= 0 then return end
 			local key = kind .. "|" .. tostring(id) .. "|" .. tostring(tier or "")
 			if seenKey[key] then
-				if q > seenKey[key].qty then seenKey[key].qty = q end
+				if id == "player_xp" then
+					-- สำหรับ XP ใช้ค่าที่เล็กกว่าหากชนกัน (กันค่าสะสมมาทับ XP รอบนั้น)
+					if q < seenKey[key].qty then seenKey[key].qty = q end
+				elseif q > seenKey[key].qty then
+					seenKey[key].qty = q
+				end
 				if not seenKey[key].img and img then
 					seenKey[key].img = img
 					seenKey[key].iconId = extractAssetId(img)
@@ -2636,13 +2700,38 @@ local function onGameFinished(payload)
 			bundle[#bundle + 1] = entry
 		end
 
-		-- 1) รางวัลตัวเลขจริงจาก payload ของ game_finished (extractNums ของ 2K v10)
+		-- 1) รางวัลตัวเลขจริงจาก payload ของ game_finished (เน้นตาราง rewards ก่อน เพื่อไม่ให้ดึง XP สะสมของยูนิต/ไอดีติดมาด้วย)
 		local rows, seenNum = {}, {}
-		extractNums(payload, rows, seenNum, 0, { n = 0 })
+		local foundExplicitRewards = false
+		for _, rKey in ipairs({ "rewards", "reward", "currency_rewards", "currencies", "drops" }) do
+			if type(payload[rKey]) == "table" then
+				foundExplicitRewards = true
+				extractNums(payload[rKey], rows, seenNum, 0, { n = 0 }, rKey)
+			end
+		end
+		-- เช็คฟิลด์ตัวเลขระดับบนสุดของ payload ด้วย (เช่น payload.gold, payload.gems, payload.xp)
+		for k, v in pairs(payload) do
+			if type(k) == "string" and type(v) == "number" and v > 0 and not seenNum[k] and not Items[k] and not Units[k] then
+				local kl = k:lower()
+				if not STAT_SKIP[kl] and not isCumulativeXpKey(kl, "") and matchesNumTag(kl) then
+					seenNum[k] = true
+					rows[#rows + 1] = { key = k, val = math.floor(v), parent = "root" }
+				end
+			end
+		end
+		-- หากไม่มีตาราง rewards เลย ค่อยสแกนทั่ว payload แบบกรองเข้มงวด
+		if not foundExplicitRewards and #rows == 0 then
+			extractNums(payload, rows, seenNum, 0, { n = 0 }, "")
+		end
 		table.sort(rows, function(a, b) return a.val > b.val end)
+		local curTotalXp = safeNum(Hub.Stats and Hub.Stats.player_xp)
 		for _, r in ipairs(rows) do
 			local cid, cname, crar, cimg = mapCurrencyMeta(r.key, stageName, st.id, st.world)
-			addBundle("currency", cid, cname, crar, r.val, cimg, nil)
+			-- ป้องกันค่า XP สะสมของไอดี/ยูนิตหลุดเข้ามาเป็นรางวัลจบด่าน (ปกติจบด่านได้ไม่เกินหลักหมื่น และต้องไม่เท่ากับ total player_xp สะสม)
+			local isCumulativeXp = (cid == "player_xp") and (r.val > 100000 or (curTotalXp > 5000 and math.abs(r.val - curTotalXp) <= 5))
+			if not isCumulativeXp then
+				addBundle("currency", cid, cname, crar, r.val, cimg, nil)
+			end
 		end
 
 		-- 2) ไอเทมและยูนิตที่แนบมาใน payload ของ game_finished (ถ้ามี)

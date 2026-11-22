@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.9.1';
-export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 17:15 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.9.2';
+export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 18:20 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,14 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.9.2',
+    updatedAt: '22 พ.ย. 2569 · 18:20 น. (เวลาไทย)',
+    highlights: [
+      'แก้บั๊ก XP จบด่านพุ่งเป็นหลักล้าน (เช่น +2,035,815) โดยดึงเฉพาะรางวัลจริงจากตาราง rewards และกรองค่า XP สะสมของยูนิต/ไอดี/แบทเทิลพาสออกทั้งหมด',
+      'แสดงสถานะ ชนะ / แพ้ ชัดเจนในประวัติของดรอปทุกด่าน พร้อมสรุปยอด ชนะ · แพ้ และแจ้งเตือนสดแบบแยกสี ชนะ (เขียว) / แพ้ (แดง)',
+    ],
+  },
   {
     version: '2.9.1',
     updatedAt: '22 พ.ย. 2569 · 17:15 น. (เวลาไทย)',
