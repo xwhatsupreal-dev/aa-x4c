@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.8.0';
-export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 09:30 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.9.0';
+export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 15:00 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,16 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.9.0',
+    updatedAt: '22 พ.ย. 2569 · 15:00 น. (เวลาไทย)',
+    highlights: [
+      'ตรวจจับหน้าต่างหลุดเกม / เตะออกของ Roblox อัตโนมัติ (Error Code 273, 277, 278, 267, 279 ฯลฯ) ส่งข้อความแจ้งบนเว็บและสลับเป็น "ออฟไลน์" ทันทีไม่ค้างออนไลน์',
+      'ป้องกันของ/เงิน/ทีมรีเซ็ตเป็น 0 เวลาย้ายเซิฟหรือเข้า-ออกด่าน — รอโหลดข้อมูลจริงครบก่อนอัปเดต และคงค่าเดิมที่จำไว้ระหว่างกำลังย้ายเซิฟ',
+      'เพิ่มการแสดงจำนวน Reroll (Trait Reroll, Curse Reroll, Star Remnant, Stat Cube / Perfect Stat Cube) บนหน้าข้อมูลไอดี',
+      'แจ้งของรางวัลจบด่านทันทีแบบ 0 ดีเลย์ (พร้อมส่งสำรองก่อน Teleport) ป้องกันการพลาดแจ้งเตือนเมื่อกดเปลี่ยนด่าน/รีเพลย์ทันทีหลังจบ',
+    ],
+  },
   {
     version: '2.8.0',
     updatedAt: '22 พ.ย. 2569 · 09:30 น. (เวลาไทย)',
@@ -300,7 +310,36 @@ export function getOnlineTimeoutMs(syncIntervalSec?: number): number {
 export function isAccountOnline(
   lastSyncedAt: number,
   now = Date.now(),
-  syncIntervalSec?: number
+  syncIntervalSec?: number,
+  disconnected?: boolean
 ): boolean {
+  if (disconnected) return false;
   return now - lastSyncedAt <= getOnlineTimeoutMs(syncIntervalSec);
+}
+
+export function getDisconnectHintTh(errorCode?: string, message?: string): string {
+  const code = String(errorCode || '').trim();
+  const msg = String(message || '').toLowerCase();
+  if (code === '273' || msg.includes('same account launched') || msg.includes('different device')) {
+    return 'มีเครื่องอื่นล็อกอินไอดีเดียวกันซ้อน (Error 273)';
+  }
+  if (code === '278' || msg.includes('idle for 20 minutes')) {
+    return 'หลุดเพราะยืนนิ่ง AFK เกิน 20 นาที (Error 278)';
+  }
+  if (code === '277' || msg.includes('lost connection') || msg.includes('internet connection')) {
+    return 'อินเทอร์เน็ตหลุดหรือขาดการเชื่อมต่อเซิร์ฟเวอร์ (Error 277)';
+  }
+  if (code === '267' || msg.includes('kicked')) {
+    return 'ถูกเตะออกจากเซิร์ฟเวอร์ (Error 267)';
+  }
+  if (code === '279' || code === '266' || msg.includes('failed to connect')) {
+    return 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ (Error ' + (code || '279') + ')';
+  }
+  if (code === '274' || code === '275' || msg.includes('maintenance') || msg.includes('shut down')) {
+    return 'เซิร์ฟเวอร์ปิดปรับปรุงหรือรีเซ็ต (Error ' + (code || '275') + ')';
+  }
+  if (code === '268' || msg.includes('unexpected client behavior')) {
+    return 'ถูกตัดการเชื่อมต่อจากไคลเอนต์ (Error 268)';
+  }
+  return code ? `หลุดการเชื่อมต่อจากเกม (Error Code: ${code})` : 'หลุดการเชื่อมต่อจากเกม';
 }

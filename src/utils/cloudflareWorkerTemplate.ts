@@ -120,8 +120,18 @@ function buildSnapshot(payload, existing) {
   const username = String(payload.username || 'UnknownPlayer').trim().slice(0, 64);
   const accountId = username.toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'player';
   const now = Date.now();
+  const isDisconnected = payload.disconnected === true;
+  const rawDisc = payload.disconnectInfo;
+  const disconnectInfo = isDisconnected
+    ? {
+        title: optStr(rawDisc?.title, 80) || 'Disconnected',
+        message: optStr(rawDisc?.message, 320) || 'Disconnected from Roblox server',
+        errorCode: rawDisc?.errorCode ? String(rawDisc.errorCode).match(/\\d{2,4}/)?.[0] : undefined,
+        at: typeof rawDisc?.at === 'number' && rawDisc.at > 1e12 ? Math.floor(rawDisc.at) : now,
+      }
+    : null;
 
-  const equipped = Array.isArray(payload.equipped)
+  const incomingEquipped = Array.isArray(payload.equipped)
     ? payload.equipped.slice(0, 6).map((u, idx) => ({
         slot: typeof u.slot === 'number' ? u.slot : idx + 1,
         id: String(u.id || \`unit_\${idx + 1}\`),
@@ -132,9 +142,9 @@ function buildSnapshot(payload, existing) {
         traits: normalizeTraits(u.traits),
         stats: u.stats,
       }))
-    : existing?.equipped || [];
+    : undefined;
 
-  const inventory = Array.isArray(payload.inventory)
+  const incomingInventory = Array.isArray(payload.inventory)
     ? payload.inventory
         .filter((it) => it && it.id)
         .map((it) => ({
@@ -145,9 +155,31 @@ function buildSnapshot(payload, existing) {
           qty: Math.max(0, Number(it.qty) || 0),
           kind: it.kind === 'unique' ? 'unique' : it.kind === 'unit' ? 'unit' : 'normal',
           iconId: cleanAssetId(it.iconId),
+          tier: it.tier ? String(it.tier).slice(0, 24) : undefined,
         }))
         .filter((it) => it.qty > 0)
-    : existing?.inventory || [];
+    : undefined;
+
+  const incGold = typeof payload.gold === 'number' && Number.isFinite(payload.gold) ? payload.gold : undefined;
+  const incGems = typeof payload.gems === 'number' && Number.isFinite(payload.gems) ? payload.gems : undefined;
+  const incLevel = typeof payload.level === 'number' && payload.level > 0 ? payload.level : undefined;
+  const incHasCore =
+    (incGold || 0) > 0 || (incGems || 0) > 0 || (incLevel || 0) > 0 ||
+    (payload.extraStats?.summerPearls || 0) > 0 || (payload.extraStats?.traitTokens || 0) > 0;
+  const exHasCore =
+    Boolean(existing) &&
+    ((existing.gold || 0) > 0 || (existing.gems || 0) > 0 || (existing.level || 0) > 0);
+  const preserveAll =
+    Boolean(existing) &&
+    (isDisconnected ||
+      payload.dataReady === false ||
+      (!incHasCore && (!incomingEquipped || incomingEquipped.length === 0) && (!incomingInventory || incomingInventory.length === 0)));
+  const preserveTeam = preserveAll || (Boolean(existing?.equipped?.length) && (!incomingEquipped || (incomingEquipped.length === 0 && payload.teamLoaded !== true)));
+  const preserveBag = preserveAll || (Boolean(existing?.inventory?.length) && (!incomingInventory || (incomingInventory.length === 0 && payload.bagLoaded !== true)));
+  const preserveStats = preserveAll || (exHasCore && !incHasCore);
+
+  const equipped = preserveTeam ? existing.equipped : incomingEquipped || existing?.equipped || [];
+  const inventory = preserveBag ? existing.inventory : incomingInventory || existing?.inventory || [];
 
   const incomingRewards = Array.isArray(payload.rewards)
     ? payload.rewards
@@ -165,6 +197,7 @@ function buildSnapshot(payload, existing) {
             qty: Math.max(1, Number(r.qty) || 1),
             src: String(r.src || 'sync'),
             iconId: cleanAssetId(r.iconId),
+            tier: r.tier ? String(r.tier).slice(0, 24) : undefined,
             runId: optStr(r.runId, 48),
             stageName: optStr(r.stageName, 80),
             stageWorld: optStr(r.stageWorld, 64),
@@ -178,12 +211,22 @@ function buildSnapshot(payload, existing) {
         })
     : [];
 
-  const mergedRewards = existing?.rewards ? [...existing.rewards] : [];
+  const mergedRewards = existing?.rewards ? existing.rewards.map((r) => ({ ...r })) : [];
   const rewardSig = (r) => \`\${r.runId || r.t}|\${r.kind}|\${r.id}|\${r.tier || ''}|\${r.qty}|\${r.src}\`;
+  const runItemKey = (r) => (r.runId ? \`\${r.runId}|\${r.kind}|\${r.id}|\${r.tier || ''}\` : '');
   const seenSig = new Set(mergedRewards.map(rewardSig));
+  const runKeyIdx = new Map();
+  mergedRewards.forEach((r, idx) => { const rk = runItemKey(r); if (rk) runKeyIdx.set(rk, idx); });
   const newlyAdded = [];
 
   for (const r of incomingRewards) {
+    const rk = runItemKey(r);
+    if (rk && runKeyIdx.has(rk)) {
+      const cur = mergedRewards[runKeyIdx.get(rk)];
+      if (r.qty > cur.qty) cur.qty = r.qty;
+      if (!cur.iconId && r.iconId) cur.iconId = r.iconId;
+      continue;
+    }
     const sig = rewardSig(r);
     if (!seenSig.has(sig)) {
       seenSig.add(sig);
@@ -194,18 +237,21 @@ function buildSnapshot(payload, existing) {
   const finalRewards = pruneRewardsToMaxRuns([...newlyAdded, ...mergedRewards], 15);
   const totals = recomputeTotals(finalRewards);
 
-  const uniqueCount =
-    typeof payload.uniqueCount === 'number'
+  const uniqueCount = preserveBag
+    ? existing.uniqueCount
+    : typeof payload.uniqueCount === 'number'
       ? payload.uniqueCount
       : inventory.filter((i) => i.kind === 'unique').reduce((sum, i) => sum + i.qty, 0);
 
-  const normalKindCount =
-    typeof payload.normalKindCount === 'number'
+  const normalKindCount = preserveBag
+    ? existing.normalKindCount
+    : typeof payload.normalKindCount === 'number'
       ? payload.normalKindCount
       : inventory.filter((i) => i.kind === 'normal').length;
 
-  const ownedUnitsCount =
-    typeof payload.ownedUnitsCount === 'number'
+  const ownedUnitsCount = preserveBag
+    ? existing.ownedUnitsCount
+    : typeof payload.ownedUnitsCount === 'number'
       ? Math.max(0, Math.floor(payload.ownedUnitsCount))
       : inventory.filter((i) => i.kind === 'unit').reduce((sum, i) => sum + i.qty, 0) ||
         existing?.ownedUnitsCount;
@@ -215,11 +261,12 @@ function buildSnapshot(payload, existing) {
     username,
     displayName: String(payload.displayName || existing?.displayName || username),
     userId: typeof payload.userId === 'number' ? payload.userId : existing?.userId,
-    gold: typeof payload.gold === 'number' ? payload.gold : existing?.gold || 0,
-    gems: typeof payload.gems === 'number' ? payload.gems : existing?.gems || 0,
-    level: typeof payload.level === 'number' ? payload.level : existing?.level,
-    extraStats: sanitizeExtraStats(payload.extraStats, existing?.extraStats),
-    currentStage: sanitizeStage(payload.currentStage, existing?.currentStage),
+    gold: preserveStats ? existing.gold : incGold ?? existing?.gold || 0,
+    gems: preserveStats ? existing.gems : incGems ?? existing?.gems || 0,
+    level: preserveStats ? existing.level : incLevel ?? existing?.level,
+    currencyIcons: payload.currencyIcons || existing?.currencyIcons,
+    extraStats: preserveStats ? existing.extraStats : sanitizeExtraStats(payload.extraStats, existing?.extraStats),
+    currentStage: isDisconnected ? existing?.currentStage || sanitizeStage(payload.currentStage) : sanitizeStage(payload.currentStage, existing?.currentStage),
     equipped,
     inventory,
     rewards: finalRewards,
@@ -228,6 +275,8 @@ function buildSnapshot(payload, existing) {
     normalKindCount,
     ownedUnitsCount,
     lastSyncedAt: now,
+    disconnected: isDisconnected,
+    disconnectInfo,
     scriptVersion:
       typeof payload.scriptVersion === 'string' && payload.scriptVersion.trim()
         ? payload.scriptVersion.trim().slice(0, 24)
@@ -383,6 +432,8 @@ export default {
         const unchangedData =
           Boolean(existing) &&
           newRewardsCount === 0 &&
+          Boolean(existing.disconnected) === Boolean(updated.disconnected) &&
+          (existing.disconnectInfo?.message || '') === (updated.disconnectInfo?.message || '') &&
           (existing.rewards?.length || 0) === updated.rewards.length &&
           existing.gold === updated.gold &&
           existing.gems === updated.gems &&

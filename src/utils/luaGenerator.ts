@@ -702,11 +702,15 @@ local Hub = {
 	SyncStatus = "v" .. SCRIPT_VERSION .. " • กำลังเชื่อมต่อ...",
 	SyncOk = false,
 	HttpBlocked = false,
+	Disconnected = false,
+	DisconnectInfo = nil,
+	DisconnectSentKey = nil,
 	Profile = nil,
 	CurrencyIcons = {
 		gold = "rbxassetid://100751534594369",
 		gems = "rbxassetid://71405874061254",
 		summerPearls = nil,
+		traitReroll = nil,
 	},
 	UploadedAssets = {},
 	UploadTried = {},
@@ -723,6 +727,9 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local AssetService = game:GetService("AssetService")
 local ContentProvider = game:GetService("ContentProvider")
+local GuiService = game:GetService("GuiService")
+local CoreGui = nil
+pcall(function() CoreGui = game:GetService("CoreGui") end)
 local LP = Players.LocalPlayer
 local PG = LP:WaitForChild("PlayerGui")
 
@@ -1526,8 +1533,16 @@ function Hub.SnapStats()
 	end
 	local p = findProfile()
 	if p then
-		if not t.gold_amount and type(rawget(p, "gold_amount")) == "number" then t.gold_amount = rawget(p, "gold_amount") end
-		if not t.gem_amount and type(rawget(p, "gem_amount")) == "number" then t.gem_amount = rawget(p, "gem_amount") end
+		local scalarFields = {
+			"gold_amount", "gem_amount", "player_xp", "trophies",
+			"rebirth_tokens", "trait_reroll_tokens", "curse_reroll_tokens", "behelit_xp",
+		}
+		for _, sf in ipairs(scalarFields) do
+			local pv = rawget(p, sf)
+			if type(pv) == "number" and (t[sf] == nil or pv > t[sf]) then
+				t[sf] = pv
+			end
+		end
 		for _, resField in ipairs({ "resources", "_resources" }) do
 			local rTbl = rawget(p, resField)
 			if type(rTbl) == "table" then
@@ -1967,18 +1982,62 @@ local function buildPayloadJson()
 			end
 		end
 	end
+
+	-- นับไอเทมสาย Reroll จากกระเป๋า (Star Remnant, Stat Cube, Perfect Stat Cube, Trait/Curse Reroll Token)
+	local traitTokens = safeNum(stats.trait_reroll_tokens)
+	local curseTokens = safeNum(stats.curse_reroll_tokens)
+	local starRemnants, statCubes, perfectStatCubes = 0, 0, 0
+	local bagTraitTokens, bagCurseTokens = 0, 0
+	for _, it in ipairs(bagList) do
+		local q = safeNum(it.qty)
+		if q > 0 and it.kind ~= "unit" then
+			local hay = (tostring(it.id or "") .. " " .. tostring(it.name or "")):lower()
+			if hay:find("star_remnant", 1, true) or hay:find("star remnant", 1, true) or hay == "remnant" then
+				starRemnants = starRemnants + q
+				if not Hub.CurrencyIcons.traitReroll and it.img then
+					Hub.CurrencyIcons.traitReroll = it.img
+				end
+			elseif hay:find("perfect", 1, true) and (hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("cube", 1, true)) then
+				perfectStatCubes = perfectStatCubes + q
+			elseif hay:find("stat_cube", 1, true) or hay:find("stat cube", 1, true) or hay:find("stat_reroll", 1, true) then
+				statCubes = statCubes + q
+			elseif hay:find("trait_reroll", 1, true) or hay:find("trait reroll", 1, true) or hay:find("reroll_token", 1, true) or hay:find("reroll token", 1, true) then
+				bagTraitTokens = bagTraitTokens + q
+				if not Hub.CurrencyIcons.traitReroll and it.img then
+					Hub.CurrencyIcons.traitReroll = it.img
+				end
+			elseif hay:find("curse_reroll", 1, true) or hay:find("curse reroll", 1, true) or hay:find("curse_token", 1, true) or hay:find("curse token", 1, true) then
+				bagCurseTokens = bagCurseTokens + q
+			end
+		end
+	end
+	if traitTokens <= 0 and bagTraitTokens > 0 then traitTokens = bagTraitTokens end
+	if curseTokens <= 0 and bagCurseTokens > 0 then curseTokens = bagCurseTokens end
+	if not Hub.CurrencyIcons.traitReroll and RES_ICON._Trait then
+		Hub.CurrencyIcons.traitReroll = RES_ICON._Trait
+	end
+
+	local goldVal = safeNum(stats.gold_amount)
+	local gemsVal = safeNum(stats.gem_amount)
+	local levelVal = (Hub.PlayerLevel and Hub.PlayerLevel > 0) and Hub.PlayerLevel or nil
+	local bagLoaded = (#invOut > 0)
+	local teamLoaded = (#teamOut > 0)
+	local statsLoaded = (goldVal > 0 or gemsVal > 0 or (levelVal ~= nil and levelVal > 0) or safeNum(stats.summer_pearls) > 0 or traitTokens > 0 or curseTokens > 0 or safeNum(stats.player_xp) > 0)
+	local dataReady = statsLoaded or bagLoaded or teamLoaded
+
 	local payload = {
 		syncKey = SYNC_KEY,
 		username = LP.Name,
 		displayName = LP.DisplayName,
 		userId = LP.UserId,
-		gold = safeNum(stats.gold_amount),
-		gems = safeNum(stats.gem_amount),
-		level = (Hub.PlayerLevel and Hub.PlayerLevel > 0) and Hub.PlayerLevel or nil,
+		gold = goldVal,
+		gems = gemsVal,
+		level = levelVal,
 		currencyIcons = {
 			gold = extractAssetId(Hub.CurrencyIcons.gold),
 			gems = extractAssetId(Hub.CurrencyIcons.gems),
 			summerPearls = extractAssetId(Hub.CurrencyIcons.summerPearls),
+			traitReroll = extractAssetId(Hub.CurrencyIcons.traitReroll),
 		},
 		extraStats = {
 			playerXp = safeNum(stats.player_xp),
@@ -1987,8 +2046,11 @@ local function buildPayloadJson()
 			trophies = safeNum(stats.trophies),
 			rebirthTokens = safeNum(stats.rebirth_tokens),
 			behelitXp = safeNum(stats.behelit_xp),
-			curseTokens = safeNum(stats.curse_reroll_tokens),
-			traitTokens = safeNum(stats.trait_reroll_tokens),
+			curseTokens = curseTokens,
+			traitTokens = traitTokens,
+			starRemnants = starRemnants,
+			statCubes = statCubes,
+			perfectStatCubes = perfectStatCubes,
 			eventResources = hasEventRes and eventResOut or nil,
 		},
 		currentStage = {
@@ -2013,6 +2075,11 @@ local function buildPayloadJson()
 		uniqueCount = uTotal,
 		normalKindCount = nKinds,
 		ownedUnitsCount = ownedUnitsCount,
+		dataReady = dataReady,
+		bagLoaded = bagLoaded,
+		teamLoaded = teamLoaded,
+		disconnected = Hub.Disconnected == true,
+		disconnectInfo = Hub.DisconnectInfo,
 		scriptVersion = SCRIPT_VERSION,
 		syncIntervalSec = AUTO_SYNC_SEC,
 	}
@@ -2044,6 +2111,8 @@ end
 
 function Hub.SyncToWeb(force, reason)
 	if not Hub.Running or not Hub.Flags.WebSync then return end
+	local isDisconnect = (reason == "disconnected")
+	if Hub.Disconnected and not isDisconnect then return end
 	if Hub.HttpBlocked and not force then return end
 	if not httpRequest then
 		Hub.SyncStatus = "ตัวรันไม่รองรับ HTTP — กดปุ่ม 'คัดลอกเข้าเว็บ'"
@@ -2054,27 +2123,31 @@ function Hub.SyncToWeb(force, reason)
 		pcall(Hub.Render)
 		return
 	end
-	local isStageClear = (reason == "stage_clear" or reason == "game_finished" or reason == "results_ui")
-	if Hub.SyncInFlight and (os.clock() - Hub.SyncStartedAt) < 20 then
-		if not isStageClear then return end
-		task.spawn(function()
-			local waited = 0
-			while Hub.SyncInFlight and waited < 5 and Hub.Running do
-				task.wait(0.25)
-				waited = waited + 0.25
-			end
-			if Hub.Running then Hub.SyncToWeb(true, reason) end
-		end)
+	local isUrgent = (reason == "stage_clear" or reason == "game_finished" or reason == "teleport_flush" or isDisconnect)
+	-- เหตุการณ์ด่วน (จบด่าน / กำลังย้ายด่าน / หลุดเกม) ยิงทันทีไม่รอ SyncInFlight กันพลาดตอนกดเปลี่ยนด่านไว
+	if not isUrgent and Hub.SyncInFlight and (os.clock() - Hub.SyncStartedAt) < 20 then
 		return
 	end
-	if not force and (os.clock() - Hub.LastSync) < AUTO_SYNC_SEC then return end
-	Hub.SyncInFlight = true
-	Hub.SyncStartedAt = os.clock()
+	if not force and not isUrgent and (os.clock() - Hub.LastSync) < AUTO_SYNC_SEC then return end
+
+	if not isUrgent then
+		Hub.SyncInFlight = true
+		Hub.SyncStartedAt = os.clock()
+	end
 	Hub.LastSync = os.clock()
+
+	-- เตรียม JSON ทันทีตั้งแต่ตอนนี้ (กันข้อมูลหล่นถ้าผู้เล่นกดเปลี่ยนด่าน/รีเพลย์ต่อทันที)
+	local buildOk, prebuiltJson = pcall(buildPayloadJson)
+	if not buildOk then
+		if not isUrgent then Hub.SyncInFlight = false end
+		Hub.SyncStatus = "Err: " .. tostring(prebuiltJson):gsub("[%c]+", " "):sub(1, 44)
+		pcall(Hub.Render)
+		return
+	end
 
 	task.spawn(function()
 		local ok, err = pcall(function()
-			local json = buildPayloadJson()
+			local json = prebuiltJson
 			if saveFile then pcall(saveFile, "AAVault_" .. LP.Name .. ".json", json) end
 			local res = httpRequest({
 				Url = WEB_URL,
@@ -2096,6 +2169,11 @@ function Hub.SyncToWeb(force, reason)
 				Hub.FailStreak = 0
 				Hub.FailNotified = false
 				Hub.SyncCount = Hub.SyncCount + 1
+				if isDisconnect then
+					local errCodeStr = Hub.DisconnectInfo and Hub.DisconnectInfo.errorCode
+					Hub.SyncStatus = "แจ้งหลุดเกมแล้ว (" .. (errCodeStr and ("Code " .. tostring(errCodeStr)) or "ออฟไลน์") .. ") • " .. clock()
+					return
+				end
 				local latestVer = SCRIPT_VERSION
 				local decOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
 				if decOk and type(decoded) == "table" and type(decoded.latestScriptVersion) == "string" and decoded.latestScriptVersion ~= "" then
@@ -2139,7 +2217,7 @@ function Hub.SyncToWeb(force, reason)
 			Hub.FailStreak = Hub.FailStreak + 1
 			Hub.SyncStatus = "Err: " .. tostring(err):gsub("[%c]+", " "):sub(1, 44)
 		end
-		Hub.SyncInFlight = false
+		if not isUrgent then Hub.SyncInFlight = false end
 		pcall(Hub.Render)
 	end)
 end
@@ -2487,99 +2565,123 @@ local function onGameFinished(payload)
 	pushRaw("game_finished", payload)
 	if type(payload) ~= "table" then return end
 
-	task.spawn(function()
-		-- รอ 0.45 วินาทีให้ show_unit_and_item_rewards / show_drop_message ที่ยิงพร้อมกันเข้าบัฟเฟอร์ครบ
-		task.wait(0.45)
-		pcall(function()
-			pcall(Hub.UpdateLocation)
-			pcall(Hub.SnapStats)
-			local st = Hub.Stage or {}
+	-- ทำงานทันทีแบบ 0 ดีเลย์ (ไม่รอ task.wait) กันพลาดแจ้งเตือนถ้าผู้เล่น/มาโครกดเปลี่ยนด่านหรือ Replay ทันที
+	pcall(function()
+		pcall(Hub.SnapStats)
+		local st = Hub.Stage or {}
 
-			local stageName = (type(payload.title) == "string" and payload.title ~= "" and payload.title)
-				or (type(payload.level) == "string" and payload.level ~= "" and payload.level)
-				or st.name or "Unknown Stage"
-			if st.name and st.name ~= "ล็อบบี้" and st.name ~= "?" and (stageName == "Victory" or stageName == "Defeat" or stageName == "VICTORY" or stageName == "DEFEAT") then
-				stageName = st.name
-			end
+		local stageName = (type(payload.title) == "string" and payload.title ~= "" and payload.title)
+			or (type(payload.level) == "string" and payload.level ~= "" and payload.level)
+			or st.name or "Unknown Stage"
+		if st.name and st.name ~= "ล็อบบี้" and st.name ~= "?" and (stageName == "Victory" or stageName == "Defeat" or stageName == "VICTORY" or stageName == "DEFEAT") then
+			stageName = st.name
+		end
 
-			local win = payload.victory
-			if win == nil and payload.title then
-				win = not string.find(string.lower(tostring(payload.title)), "fail", 1, true)
-					and not string.find(string.lower(tostring(payload.title)), "defeat", 1, true)
-			end
-			local resultTag = (win == false) and "DEFEAT" or "VICTORY"
+		local win = payload.victory
+		if win == nil and payload.title then
+			win = not string.find(string.lower(tostring(payload.title)), "fail", 1, true)
+				and not string.find(string.lower(tostring(payload.title)), "defeat", 1, true)
+		end
+		local resultTag = (win == false) and "DEFEAT" or "VICTORY"
 
-			local pStats = type(payload.stats) == "table" and payload.stats or nil
-			local stageWaves = (pStats and pStats.waves_completed and ("Wave " .. tostring(pStats.waves_completed)))
-				or ((st.wave and st.wave > 0) and ("Wave " .. tostring(st.wave)) or nil)
-			local stageTimer = nil
-			if pStats and pStats.time_taken then
-				local sec = math.floor(tonumber(pStats.time_taken) or 0)
-				stageTimer = string.format("%02d:%02d", math.floor(sec / 60), sec % 60)
-			end
+		local pStats = type(payload.stats) == "table" and payload.stats or nil
+		local stageWaves = (pStats and pStats.waves_completed and ("Wave " .. tostring(pStats.waves_completed)))
+			or ((st.wave and st.wave > 0) and ("Wave " .. tostring(st.wave)) or nil)
+		local stageTimer = nil
+		if pStats and pStats.time_taken then
+			local sec = math.floor(tonumber(pStats.time_taken) or 0)
+			stageTimer = string.format("%02d:%02d", math.floor(sec / 60), sec % 60)
+		end
 
-			local bundle, seenKey = {}, {}
-			local function addBundle(kind, id, name, rarity, qty, img, tier)
-				local q = math.floor(tonumber(qty) or 0)
-				if q <= 0 then return end
-				local key = kind .. "|" .. tostring(id) .. "|" .. tostring(tier or "")
-				if seenKey[key] then
-					if q > seenKey[key].qty then seenKey[key].qty = q end
-					if not seenKey[key].img and img then
-						seenKey[key].img = img
-						seenKey[key].iconId = extractAssetId(img)
-					end
-					return
+		local bundle, seenKey = {}, {}
+		local function addBundle(kind, id, name, rarity, qty, img, tier)
+			local q = math.floor(tonumber(qty) or 0)
+			if q <= 0 then return end
+			local key = kind .. "|" .. tostring(id) .. "|" .. tostring(tier or "")
+			if seenKey[key] then
+				if q > seenKey[key].qty then seenKey[key].qty = q end
+				if not seenKey[key].img and img then
+					seenKey[key].img = img
+					seenKey[key].iconId = extractAssetId(img)
 				end
-				local entry = {
-					kind = kind,
-					id = tostring(id),
-					name = tostring(name),
-					rarity = rarity or "Common",
-					qty = q,
-					tier = tier,
-					img = img,
-					iconId = extractAssetId(img),
-				}
-				seenKey[key] = entry
-				bundle[#bundle + 1] = entry
+				return
 			end
+			local entry = {
+				kind = kind,
+				id = tostring(id),
+				name = tostring(name),
+				rarity = rarity or "Common",
+				qty = q,
+				tier = tier,
+				img = img,
+				iconId = extractAssetId(img),
+			}
+			seenKey[key] = entry
+			bundle[#bundle + 1] = entry
+		end
 
-			-- 1) รางวัลตัวเลขจริงจาก payload ของ game_finished (extractNums ของ 2K v10)
-			local rows, seenNum = {}, {}
-			extractNums(payload, rows, seenNum, 0, { n = 0 })
-			table.sort(rows, function(a, b) return a.val > b.val end)
-			for _, r in ipairs(rows) do
-				local cid, cname, crar, cimg = mapCurrencyMeta(r.key, stageName, st.id, st.world)
-				addBundle("currency", cid, cname, crar, r.val, cimg, nil)
-			end
+		-- 1) รางวัลตัวเลขจริงจาก payload ของ game_finished (extractNums ของ 2K v10)
+		local rows, seenNum = {}, {}
+		extractNums(payload, rows, seenNum, 0, { n = 0 })
+		table.sort(rows, function(a, b) return a.val > b.val end)
+		for _, r in ipairs(rows) do
+			local cid, cname, crar, cimg = mapCurrencyMeta(r.key, stageName, st.id, st.world)
+			addBundle("currency", cid, cname, crar, r.val, cimg, nil)
+		end
 
-			-- 2) ไอเทมและยูนิตที่แนบมาใน payload ของ game_finished (ถ้ามี)
-			for _, it in ipairs(idsFromPacked(payload)) do
-				addBundle("item", it.id, iName(it.id), iRarity(it.id), it.n, itemImg(it.id), it.tier)
-			end
-			for _, u in ipairs(unitsFromPacked(payload)) do
-				addBundle("unit", u.id, uName(u.id), uRarity(u.id), u.n, nil, nil)
-			end
+		-- 2) ไอเทมและยูนิตที่แนบมาใน payload ของ game_finished (ถ้ามี)
+		for _, it in ipairs(idsFromPacked(payload)) do
+			addBundle("item", it.id, iName(it.id), iRarity(it.id), it.n, itemImg(it.id), it.tier)
+		end
+		for _, u in ipairs(unitsFromPacked(payload)) do
+			addBundle("unit", u.id, uName(u.id), uRarity(u.id), u.n, nil, nil)
+		end
 
-			-- 3) รวมของรางวัลจริงจาก show_unit_and_item_rewards / show_drop_message / show_drop_message_custom ที่บัฟเฟอร์ไว้
-			for _, pDrop in pairs(Hub.PendingDrops) do
-				addBundle(pDrop.kind, pDrop.id, pDrop.name, pDrop.rarity, pDrop.qty, pDrop.img, pDrop.tier)
-			end
-			Hub.PendingDrops = {}
+		-- 3) รวมของรางวัลจริงจาก show_unit_and_item_rewards / show_drop_message / show_drop_message_custom ที่บัฟเฟอร์ไว้
+		for _, pDrop in pairs(Hub.PendingDrops) do
+			addBundle(pDrop.kind, pDrop.id, pDrop.name, pDrop.rarity, pDrop.qty, pDrop.img, pDrop.tier)
+		end
+		Hub.PendingDrops = {}
 
-			if #bundle > 0 then
-				Hub.RunSeq = Hub.RunSeq + 1
-				local runId = tostring(os.time()) .. "_" .. tostring(Hub.RunSeq)
-				local nowClock = clock()
-				local nowMs = os.time() * 1000
-				local gamemodeLabel = st.gamemode and (resultTag .. " • " .. tostring(st.gamemode)) or resultTag
+		-- สร้าง runId & LastFinishMeta ไว้ทันทีแม้ bundle ยังว่าง เพื่อให้ show_unit_and_item_rewards ที่ตามมาอีก 0.05 วิแนบเข้า run เดียวกันได้ทันที
+		Hub.RunSeq = Hub.RunSeq + 1
+		local runId = tostring(os.time()) .. "_" .. tostring(Hub.RunSeq)
+		local nowClock = clock()
+		local nowMs = os.time() * 1000
+		local gamemodeLabel = st.gamemode and (resultTag .. " • " .. tostring(st.gamemode)) or resultTag
 
-				Hub.LastFinishAt = os.clock()
-				Hub.LastFinishRunId = runId
-				Hub.LastFinishMeta = {
+		Hub.LastFinishAt = os.clock()
+		Hub.LastFinishRunId = runId
+		Hub.LastFinishMeta = {
+			t = nowClock,
+			ts = nowMs,
+			stageName = stageName,
+			stageWorld = st.world,
+			stageMap = st.map,
+			stageDifficulty = st.difficulty,
+			stageGamemode = gamemodeLabel,
+			stageWaves = stageWaves,
+			stageTimer = stageTimer,
+			stageImg = st.mapImg,
+			stageImageId = st.mapImageId,
+		}
+
+		if #bundle > 0 then
+			for idxItem = #bundle, 1, -1 do
+				local b = bundle[idxItem]
+				table.insert(Hub.Rewards, 1, {
 					t = nowClock,
 					ts = nowMs,
+					kind = b.kind,
+					id = b.id,
+					name = b.name,
+					rarity = b.rarity,
+					qty = b.qty,
+					src = "stage_clear",
+					img = b.img,
+					iconId = b.iconId,
+					tier = b.tier,
+					runId = runId,
 					stageName = stageName,
 					stageWorld = st.world,
 					stageMap = st.map,
@@ -2589,60 +2691,202 @@ local function onGameFinished(payload)
 					stageTimer = stageTimer,
 					stageImg = st.mapImg,
 					stageImageId = st.mapImageId,
-				}
+				})
+			end
+			pruneRewardsTo15()
 
-				for idxItem = #bundle, 1, -1 do
-					local b = bundle[idxItem]
+			if Hub.Flags.Notify then
+				local summaryParts = {}
+				for i = 1, math.min(#bundle, 3) do
+					local label = bundle[i].tier and (bundle[i].name .. " [" .. bundle[i].tier .. "]") or bundle[i].name
+					summaryParts[#summaryParts + 1] = label .. " +" .. tostring(bundle[i].qty)
+				end
+				local subText = table.concat(summaryParts, " • ")
+				if #bundle > 3 then subText = subText .. " (+" .. tostring(#bundle - 3) .. " อื่นๆ)" end
+				local toastCol = (win == false) and Color3.fromRGB(255, 110, 120) or Color3.fromRGB(16, 245, 160)
+				pcall(function()
+					Hub.Toast("clear", resultTag .. " — " .. tostring(stageName), subText, toastCol, st.mapImg)
+				end)
+			end
+
+			Hub.Tab = "reward"
+			pcall(Hub.Render)
+
+			-- ส่งสรุปจบด่านขึ้นเว็บทันที (0 ดีเลย์!) ก่อนที่จะมีการกดเปลี่ยนด่านหรือ Teleport
+			Hub.SyncToWeb(true, "game_finished")
+			uploadBundleAssetsAsync(st, stageName, bundle)
+		end
+	end)
+end
+
+-- Flush ของดรอปค้างในบัฟเฟอร์ทันทีถ้าผู้เล่นกด Teleport/เปลี่ยนด่านก่อน game_finished
+pcall(function()
+	conn(LP.OnTeleport:Connect(function(state)
+		if state == Enum.TeleportState.Started or state == Enum.TeleportState.InProgress then
+			if next(Hub.PendingDrops) ~= nil then
+				local st = Hub.Stage or {}
+				Hub.RunSeq = Hub.RunSeq + 1
+				local runId = tostring(os.time()) .. "_" .. tostring(Hub.RunSeq)
+				local nowClock = clock()
+				local nowMs = os.time() * 1000
+				for _, pDrop in pairs(Hub.PendingDrops) do
 					table.insert(Hub.Rewards, 1, {
 						t = nowClock,
 						ts = nowMs,
-						kind = b.kind,
-						id = b.id,
-						name = b.name,
-						rarity = b.rarity,
-						qty = b.qty,
+						kind = pDrop.kind,
+						id = pDrop.id,
+						name = pDrop.name,
+						rarity = pDrop.rarity,
+						qty = pDrop.qty,
 						src = "stage_clear",
-						img = b.img,
-						iconId = b.iconId,
-						tier = b.tier,
+						img = pDrop.img,
+						iconId = pDrop.iconId,
+						tier = pDrop.tier,
 						runId = runId,
-						stageName = stageName,
+						stageName = st.name or "Unknown Stage",
 						stageWorld = st.world,
 						stageMap = st.map,
 						stageDifficulty = st.difficulty,
-						stageGamemode = gamemodeLabel,
-						stageWaves = stageWaves,
-						stageTimer = stageTimer,
+						stageGamemode = st.gamemode,
+						stageWaves = (st.wave and st.wave > 0) and ("Wave " .. tostring(st.wave)) or nil,
 						stageImg = st.mapImg,
 						stageImageId = st.mapImageId,
 					})
 				end
+				Hub.PendingDrops = {}
 				pruneRewardsTo15()
+				Hub.SyncToWeb(true, "teleport_flush")
+			end
+		end
+	end))
+end)
 
-				if Hub.Flags.Notify then
-					local summaryParts = {}
-					for i = 1, math.min(#bundle, 3) do
-						local label = bundle[i].tier and (bundle[i].name .. " [" .. bundle[i].tier .. "]") or bundle[i].name
-						summaryParts[#summaryParts + 1] = label .. " +" .. tostring(bundle[i].qty)
+------------------------------------------------------------------
+-- 4.5) DISCONNECT / ERROR PROMPT DETECTOR (แจ้งเว็บ + ออฟไลน์ทันที!)
+------------------------------------------------------------------
+local function parseErrorCodeFromText(msg)
+	if type(msg) ~= "string" then return nil end
+	return msg:match("Error Code:%s*(%d+)") or msg:match("Code:%s*(%d+)")
+end
+
+local function triggerDisconnect(title, msg, code)
+	local cleanMsg = tostring(msg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local cleanTitle = tostring(title or "Disconnected"):gsub("^%s+", ""):gsub("%s+$", "")
+	if cleanTitle == "" then cleanTitle = "Disconnected" end
+	local cleanCode = code and tostring(code):match("(%d+)") or parseErrorCodeFromText(cleanMsg)
+	if cleanMsg == "" and not cleanCode then return end
+	if cleanMsg == "" then
+		cleanMsg = "Disconnected (Error Code: " .. tostring(cleanCode) .. ")"
+	end
+	local key = cleanTitle .. "|" .. cleanMsg .. "|" .. tostring(cleanCode or "")
+	if Hub.DisconnectSentKey == key then return end
+	Hub.DisconnectSentKey = key
+	Hub.Disconnected = true
+	Hub.DisconnectInfo = {
+		title = cleanTitle,
+		message = cleanMsg,
+		errorCode = cleanCode,
+		at = os.time() * 1000,
+	}
+	Hub.SyncStatus = "หลุดจากเกม (" .. (cleanCode and ("Code " .. cleanCode) or "Disconnected") .. ")"
+	pcall(Hub.Render)
+	Hub.SyncToWeb(true, "disconnected")
+end
+
+local function checkDisconnectPrompt()
+	-- 1) ตรวจผ่าน GuiService.GetErrorMessage / GetErrorCode
+	local okG, gMsg = pcall(function() return GuiService:GetErrorMessage() end)
+	local okC, gCode = pcall(function() return GuiService:GetErrorCode() end)
+	local codeNum = nil
+	if okC and gCode and gCode ~= Enum.ConnectionError.OK then
+		local cStr = tostring(gCode)
+		codeNum = cStr:match("(%d+)")
+		if not codeNum and type(gCode.Value) == "number" and gCode.Value > 0 then
+			codeNum = tostring(gCode.Value)
+		end
+	end
+	if okG and type(gMsg) == "string" and gMsg:match("%S") then
+		triggerDisconnect("Disconnected", gMsg, codeNum or parseErrorCodeFromText(gMsg))
+		return true
+	end
+
+	-- 2) ตรวจหน้าต่าง ErrorPrompt ใน CoreGui.RobloxPromptGui.promptOverlay (เช่น Error Code: 273 / 277 / 278 / 267)
+	if CoreGui then
+		local rpg = CoreGui:FindFirstChild("RobloxPromptGui")
+		local overlay = rpg and rpg:FindFirstChild("promptOverlay")
+		if overlay then
+			for _, child in ipairs(overlay:GetChildren()) do
+				if child.Name == "ErrorPrompt" or child:FindFirstChild("MessageArea", true) then
+					local titleLbl = idx(child, "TitleFrame.ErrorTitle") or child:FindFirstChild("ErrorTitle", true)
+					local msgLbl = idx(child, "MessageArea.ErrorFrame.ErrorMessage") or child:FindFirstChild("ErrorMessage", true)
+					local tText = (titleLbl and titleLbl:IsA("TextLabel")) and titleLbl.Text or "Disconnected"
+					local mText = (msgLbl and msgLbl:IsA("TextLabel")) and msgLbl.Text or ""
+					if mText == "" then
+						for _, d in ipairs(child:GetDescendants()) do
+							if d:IsA("TextLabel") and d.Text and #d.Text > #mText and d.Text ~= tText and d.Text ~= "Leave" and d.Text ~= "Reconnect" then
+								mText = d.Text
+							end
+						end
 					end
-					local subText = table.concat(summaryParts, " • ")
-					if #bundle > 3 then subText = subText .. " (+" .. tostring(#bundle - 3) .. " อื่นๆ)" end
-					local toastCol = (win == false) and Color3.fromRGB(255, 110, 120) or Color3.fromRGB(16, 245, 160)
-					pcall(function()
-						Hub.Toast("clear", resultTag .. " — " .. tostring(stageName), subText, toastCol, st.mapImg)
-					end)
+					if mText ~= "" then
+						triggerDisconnect(tText, mText, parseErrorCodeFromText(mText) or codeNum)
+						return true
+					end
 				end
+			end
+		end
+	end
+	return false
+end
 
-				Hub.Tab = "reward"
-				pcall(Hub.Render)
+pcall(function()
+	conn(GuiService.ErrorMessageChanged:Connect(function(msg)
+		if type(msg) == "string" and msg:match("%S") then
+			triggerDisconnect("Disconnected", msg, parseErrorCodeFromText(msg))
+		else
+			pcall(checkDisconnectPrompt)
+		end
+	end))
+end)
 
-				-- ส่งสรุปจบด่านขึ้นเว็บทันทีโดยไม่รอคิวอัปโหลดรูป
-				Hub.SyncToWeb(true, "game_finished")
-				uploadBundleAssetsAsync(st, stageName, bundle)
+local function watchPromptOverlay(overlay)
+	if not overlay then return end
+	local function inspectPrompt(node)
+		task.defer(function()
+			pcall(checkDisconnectPrompt)
+		end)
+		pcall(function()
+			local msgLbl = node:FindFirstChild("ErrorMessage", true)
+			if msgLbl and msgLbl:IsA("TextLabel") then
+				conn(msgLbl:GetPropertyChangedSignal("Text"):Connect(function()
+					pcall(checkDisconnectPrompt)
+				end))
 			end
 		end)
-	end)
+	end
+	for _, ch in ipairs(overlay:GetChildren()) do inspectPrompt(ch) end
+	conn(overlay.ChildAdded:Connect(inspectPrompt))
 end
+
+pcall(function()
+	if CoreGui then
+		local rpg = CoreGui:FindFirstChild("RobloxPromptGui")
+		if rpg then
+			local ov = rpg:FindFirstChild("promptOverlay")
+			if ov then watchPromptOverlay(ov) end
+			conn(rpg.ChildAdded:Connect(function(ch)
+				if ch.Name == "promptOverlay" then watchPromptOverlay(ch) end
+			end))
+		else
+			conn(CoreGui.ChildAdded:Connect(function(ch)
+				if ch.Name == "RobloxPromptGui" then
+					local ov = ch:FindFirstChild("promptOverlay") or ch:WaitForChild("promptOverlay", 5)
+					if ov then watchPromptOverlay(ov) end
+				end
+			end))
+		end
+	end
+end)
 
 -- Hook 4 RemoteEvent จริงของเกม (2K v10 — ไม่มีเดา diff ไม่มีสแกน ResultsUI)
 local endpoints = RS:FindFirstChild("endpoints")
@@ -2769,32 +3013,52 @@ pcall(Hub.UpdateLocation)
 Hub.PicMode = Hub.Flags.Pic
 pcall(Hub.Render)
 
--- ลูป 1: อัปเดตด่านที่กำลังเล่น + ค่าเงิน/ทีมในเครื่อง
+-- ลูป 1: อัปเดตด่านที่กำลังเล่น + ตรวจหน้าต่างหลุดเกมทุก 1 วิ + ค่าเงิน/ทีมในเครื่อง
 task.spawn(function()
 	local tickCount = 0
 	while Hub.Running do
-		if tickCount % 3 == 0 then
-			pcall(Hub.UpdateLocation)
-		end
-		if tickCount % 5 == 0 then
-			pcall(Hub.SnapStats)
-			pcall(Hub.ReadTeam)
-			if Hub.Tab == "level" then pcall(Hub.Render) end
+		pcall(checkDisconnectPrompt)
+		if not Hub.Disconnected then
+			if tickCount % 3 == 0 then
+				pcall(Hub.UpdateLocation)
+			end
+			if tickCount % 5 == 0 then
+				pcall(Hub.SnapStats)
+				pcall(Hub.ReadTeam)
+				if Hub.Tab == "level" then pcall(Hub.Render) end
+			end
 		end
 		tickCount = tickCount + 1
 		task.wait(1)
 	end
 end)
 
--- ลูป 2: โหมดประหยัดการเขียน — ส่ง Heartbeat ตามรอบ AUTO_SYNC_SEC (หลังจบด่านจะส่งทันทีและรีเซ็ตรอบใหม่)
+-- ลูป 2: รอให้ข้อมูลโหลดเสร็จก่อนส่งครั้งแรก (กันเวลาย้ายเซิฟรีเป็น 0) + Heartbeat ตามรอบ AUTO_SYNC_SEC
 task.spawn(function()
-	Hub.SyncToWeb(true, "startup")
+	local waitedLoad = 0
+	while Hub.Running and not Hub.Disconnected and waitedLoad < 12 do
+		pcall(Hub.SnapStats)
+		pcall(Hub.ReadTeam)
+		local bList = {}
+		pcall(function() bList = Hub.ReadBag() end)
+		local stCur = Hub.CurrentStats or {}
+		local ready = (#Hub.TeamList > 0) or (#bList > 0) or (safeNum(stCur.gold_amount) > 0) or (safeNum(stCur.gem_amount) > 0)
+		if ready then break end
+		task.wait(0.5)
+		waitedLoad = waitedLoad + 0.5
+	end
+	if Hub.Running and not Hub.Disconnected then
+		pcall(Hub.UpdateLocation)
+		pcall(Hub.Render)
+		Hub.SyncToWeb(true, "startup")
+	end
 	task.delay(4, function()
-		if Hub.Running then pcall(Hub.ScanAndUploadGameAssets, false) end
+		if Hub.Running and not Hub.Disconnected then pcall(Hub.ScanAndUploadGameAssets, false) end
 	end)
 	while Hub.Running do
 		task.wait(5)
 		if not Hub.Running then break end
+		if Hub.Disconnected then break end
 		if not Hub.HttpBlocked and (os.clock() - Hub.LastSync) >= AUTO_SYNC_SEC then
 			pcall(Hub.SyncToWeb, true, "heartbeat")
 		end

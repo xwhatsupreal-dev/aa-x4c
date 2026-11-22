@@ -29,6 +29,14 @@ export interface CurrencyIcons {
   gold?: string;
   gems?: string;
   summerPearls?: string;
+  traitReroll?: string;
+}
+
+export interface DisconnectInfo {
+  title: string;
+  message: string;
+  errorCode?: string;
+  at: number;
 }
 
 export interface ExtraStats {
@@ -40,6 +48,9 @@ export interface ExtraStats {
   behelitXp?: number;
   curseTokens?: number;
   traitTokens?: number;
+  starRemnants?: number;
+  statCubes?: number;
+  perfectStatCubes?: number;
   eventResources?: Record<string, number>;
 }
 
@@ -139,6 +150,8 @@ export interface AccountSnapshot {
   normalKindCount: number;
   ownedUnitsCount?: number;
   lastSyncedAt: number;
+  disconnected?: boolean;
+  disconnectInfo?: DisconnectInfo | null;
   scriptVersion?: string;
   syncIntervalSec?: number;
   source: 'lua';
@@ -206,6 +219,16 @@ export interface SyncPayload {
   uniqueCount?: number;
   normalKindCount?: number;
   ownedUnitsCount?: number;
+  dataReady?: boolean;
+  bagLoaded?: boolean;
+  teamLoaded?: boolean;
+  disconnected?: boolean;
+  disconnectInfo?: {
+    title?: string;
+    message?: string;
+    errorCode?: string | number;
+    at?: number;
+  } | null;
   scriptVersion?: string;
   syncIntervalSec?: number;
 }

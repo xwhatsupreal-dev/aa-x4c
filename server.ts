@@ -25,6 +25,7 @@ import {
 import type {
   AccountSnapshot,
   CurrencyIcons,
+  DisconnectInfo,
   ExtraStats,
   InventoryItem,
   RewardEntry,
@@ -242,11 +243,40 @@ function sanitizeCurrencyIcons(raw: unknown, fallback?: CurrencyIcons): Currency
     gold: cleanAssetId(s.gold) || fallback?.gold,
     gems: cleanAssetId(s.gems) || fallback?.gems,
     summerPearls: cleanAssetId(s.summerPearls) || fallback?.summerPearls,
+    traitReroll: cleanAssetId(s.traitReroll) || fallback?.traitReroll,
   };
-  return out.gold || out.gems || out.summerPearls ? out : fallback;
+  return out.gold || out.gems || out.summerPearls || out.traitReroll ? out : fallback;
 }
 
-function sanitizeExtraStats(raw: unknown, fallback?: ExtraStats): ExtraStats | undefined {
+function sanitizeDisconnectInfo(raw: unknown, now: number): DisconnectInfo | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Record<string, unknown>;
+  const message = optStr(s.message, 320);
+  const title = optStr(s.title, 80) || 'Disconnected';
+  const rawCode = s.errorCode;
+  const codeFromField =
+    typeof rawCode === 'number' && Number.isFinite(rawCode) && rawCode > 0
+      ? String(Math.floor(rawCode))
+      : typeof rawCode === 'string'
+        ? rawCode.match(/\d{2,4}/)?.[0]
+        : undefined;
+  const codeFromMsg = message?.match(/Error Code:\s*(\d{2,4})/i)?.[1];
+  const errorCode = codeFromField || codeFromMsg;
+  if (!message && !errorCode) return null;
+  const atRaw = Number(s.at);
+  return {
+    title,
+    message: message || (errorCode ? `Disconnected (Error Code: ${errorCode})` : 'Disconnected'),
+    errorCode,
+    at: Number.isFinite(atRaw) && atRaw > 1_000_000_000_000 ? Math.floor(atRaw) : now,
+  };
+}
+
+function sanitizeExtraStats(
+  raw: unknown,
+  fallback?: ExtraStats,
+  preserveBagDerived = false
+): ExtraStats | undefined {
   if (!raw || typeof raw !== 'object') return fallback;
   const s = raw as Record<string, unknown>;
   let eventResources: Record<string, number> | undefined;
@@ -264,15 +294,40 @@ function sanitizeExtraStats(raw: unknown, fallback?: ExtraStats): ExtraStats | u
     }
     if (count > 0) eventResources = out;
   }
+  const incTrait = optNum(s.traitTokens);
+  const incCurse = optNum(s.curseTokens);
+  const incStarRem = optNum(s.starRemnants);
+  const incStatCubes = optNum(s.statCubes);
+  const incPerfCubes = optNum(s.perfectStatCubes);
   return {
-    playerXp: optNum(s.playerXp),
-    resource: optNum(s.resource),
-    summerPearls: optNum(s.summerPearls),
-    trophies: optNum(s.trophies),
-    rebirthTokens: optNum(s.rebirthTokens),
-    behelitXp: optNum(s.behelitXp),
-    curseTokens: optNum(s.curseTokens),
-    traitTokens: optNum(s.traitTokens),
+    playerXp: optNum(s.playerXp) ?? fallback?.playerXp,
+    resource: optNum(s.resource) ?? fallback?.resource,
+    summerPearls: optNum(s.summerPearls) ?? fallback?.summerPearls,
+    trophies: optNum(s.trophies) ?? fallback?.trophies,
+    rebirthTokens: optNum(s.rebirthTokens) ?? fallback?.rebirthTokens,
+    behelitXp: optNum(s.behelitXp) ?? fallback?.behelitXp,
+    curseTokens:
+      preserveBagDerived && (!incCurse || incCurse === 0) && (fallback?.curseTokens ?? 0) > 0
+        ? fallback?.curseTokens
+        : incCurse ?? fallback?.curseTokens,
+    traitTokens:
+      preserveBagDerived && (!incTrait || incTrait === 0) && (fallback?.traitTokens ?? 0) > 0
+        ? fallback?.traitTokens
+        : incTrait ?? fallback?.traitTokens,
+    starRemnants:
+      preserveBagDerived && (!incStarRem || incStarRem === 0) && (fallback?.starRemnants ?? 0) > 0
+        ? fallback?.starRemnants
+        : incStarRem ?? fallback?.starRemnants,
+    statCubes:
+      preserveBagDerived && (!incStatCubes || incStatCubes === 0) && (fallback?.statCubes ?? 0) > 0
+        ? fallback?.statCubes
+        : incStatCubes ?? fallback?.statCubes,
+    perfectStatCubes:
+      preserveBagDerived &&
+      (!incPerfCubes || incPerfCubes === 0) &&
+      (fallback?.perfectStatCubes ?? 0) > 0
+        ? fallback?.perfectStatCubes
+        : incPerfCubes ?? fallback?.perfectStatCubes,
     eventResources: eventResources ?? fallback?.eventResources,
   };
 }
@@ -281,8 +336,16 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
   const username = String(payload.username || 'UnknownPlayer').trim().slice(0, 64);
   const accountId = username.toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'player';
   const now = Date.now();
+  const isDisconnected = payload.disconnected === true;
+  const disconnectInfo = isDisconnected
+    ? sanitizeDisconnectInfo(payload.disconnectInfo, now) ?? {
+        title: 'Disconnected',
+        message: 'Disconnected from Roblox server',
+        at: now,
+      }
+    : null;
 
-  const equipped: TeamUnit[] = Array.isArray(payload.equipped)
+  const incomingEquipped: TeamUnit[] | undefined = Array.isArray(payload.equipped)
     ? payload.equipped.slice(0, 6).map((u, idx) => ({
         slot: typeof u.slot === 'number' ? u.slot : idx + 1,
         id: String(u.id || `unit_${idx + 1}`),
@@ -293,9 +356,9 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
         traits: normalizeTraits(u.traits),
         stats: u.stats,
       }))
-    : existing?.equipped ?? [];
+    : undefined;
 
-  const inventory: InventoryItem[] = Array.isArray(payload.inventory)
+  const incomingInventory: InventoryItem[] | undefined = Array.isArray(payload.inventory)
     ? payload.inventory
         .filter((it) => it && it.id)
         .map((it): InventoryItem => {
@@ -315,7 +378,54 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
           };
         })
         .filter((it) => it.qty > 0)
-    : existing?.inventory ?? [];
+    : undefined;
+
+  const incomingGold = typeof payload.gold === 'number' && Number.isFinite(payload.gold) ? payload.gold : undefined;
+  const incomingGems = typeof payload.gems === 'number' && Number.isFinite(payload.gems) ? payload.gems : undefined;
+  const incomingLevel = typeof payload.level === 'number' && Number.isFinite(payload.level) && payload.level > 0 ? payload.level : undefined;
+  const incomingEx = payload.extraStats;
+  const incomingHasCoreNumbers =
+    (incomingGold ?? 0) > 0 ||
+    (incomingGems ?? 0) > 0 ||
+    (incomingLevel ?? 0) > 0 ||
+    (incomingEx?.summerPearls ?? 0) > 0 ||
+    (incomingEx?.traitTokens ?? 0) > 0 ||
+    (incomingEx?.curseTokens ?? 0) > 0 ||
+    (incomingEx?.playerXp ?? 0) > 0;
+
+  const existingHasCoreNumbers =
+    Boolean(existing) &&
+    ((existing!.gold ?? 0) > 0 ||
+      (existing!.gems ?? 0) > 0 ||
+      (existing!.level ?? 0) > 0 ||
+      (existing!.extraStats?.summerPearls ?? 0) > 0 ||
+      (existing!.extraStats?.traitTokens ?? 0) > 0 ||
+      (existing!.extraStats?.playerXp ?? 0) > 0);
+
+  // Server-hop / teleport zero-reset protection: keep remembered values until new server finishes loading
+  const preserveAll =
+    Boolean(existing) &&
+    (isDisconnected ||
+      payload.dataReady === false ||
+      (!incomingHasCoreNumbers &&
+        (!incomingEquipped || incomingEquipped.length === 0) &&
+        (!incomingInventory || incomingInventory.length === 0)));
+
+  const preserveTeam =
+    preserveAll ||
+    (Boolean(existing?.equipped?.length) &&
+      (!incomingEquipped || (incomingEquipped.length === 0 && payload.teamLoaded !== true)));
+
+  const preserveBag =
+    preserveAll ||
+    (Boolean(existing?.inventory?.length) &&
+      (!incomingInventory || (incomingInventory.length === 0 && payload.bagLoaded !== true)));
+
+  const preserveStats =
+    preserveAll || (existingHasCoreNumbers && !incomingHasCoreNumbers);
+
+  const equipped: TeamUnit[] = preserveTeam ? existing!.equipped : incomingEquipped ?? existing?.equipped ?? [];
+  const inventory: InventoryItem[] = preserveBag ? existing!.inventory : incomingInventory ?? existing?.inventory ?? [];
 
   const incomingRewards: RewardEntry[] = Array.isArray(payload.rewards)
     ? payload.rewards
@@ -349,13 +459,29 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
         })
     : [];
 
-  const mergedRewards: RewardEntry[] = existing ? [...existing.rewards] : [];
+  const mergedRewards: RewardEntry[] = existing ? existing.rewards.map((r) => ({ ...r })) : [];
   const rewardSig = (r: RewardEntry) =>
     `${r.runId || r.t}|${r.kind}|${r.id}|${r.tier || ''}|${r.qty}|${r.src}`;
+  const runItemKey = (r: RewardEntry) =>
+    r.runId ? `${r.runId}|${r.kind}|${r.id}|${r.tier || ''}` : '';
   const seenSig = new Set(mergedRewards.map(rewardSig));
+  const runKeyIndex = new Map<string, number>();
+  mergedRewards.forEach((r, idx) => {
+    const rk = runItemKey(r);
+    if (rk) runKeyIndex.set(rk, idx);
+  });
   const newlyAdded: RewardEntry[] = [];
 
   for (const r of incomingRewards) {
+    const rk = runItemKey(r);
+    if (rk && runKeyIndex.has(rk)) {
+      const idx = runKeyIndex.get(rk)!;
+      const cur = mergedRewards[idx];
+      if (r.qty > cur.qty) cur.qty = r.qty;
+      if (!cur.iconId && r.iconId) cur.iconId = r.iconId;
+      if (!cur.stageImageId && r.stageImageId) cur.stageImageId = r.stageImageId;
+      continue;
+    }
     const sig = rewardSig(r);
     if (!seenSig.has(sig)) {
       seenSig.add(sig);
@@ -368,18 +494,21 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
   const finalRewards = pruneRewardsToMaxRuns(combinedRewards, MAX_DROP_HISTORY_RUNS);
   const totals = recomputeTotals(finalRewards);
 
-  const uniqueCount =
-    typeof payload.uniqueCount === 'number'
+  const uniqueCount = preserveBag
+    ? existing!.uniqueCount
+    : typeof payload.uniqueCount === 'number'
       ? payload.uniqueCount
       : inventory.filter((i) => i.kind === 'unique').reduce((sum, i) => sum + i.qty, 0);
 
-  const normalKindCount =
-    typeof payload.normalKindCount === 'number'
+  const normalKindCount = preserveBag
+    ? existing!.normalKindCount
+    : typeof payload.normalKindCount === 'number'
       ? payload.normalKindCount
       : inventory.filter((i) => i.kind === 'normal').length;
 
-  const ownedUnitsCount =
-    typeof payload.ownedUnitsCount === 'number'
+  const ownedUnitsCount = preserveBag
+    ? existing!.ownedUnitsCount
+    : typeof payload.ownedUnitsCount === 'number'
       ? Math.max(0, Math.floor(payload.ownedUnitsCount))
       : inventory.filter((i) => i.kind === 'unit').reduce((sum, i) => sum + i.qty, 0) ||
         existing?.ownedUnitsCount;
@@ -390,12 +519,16 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     displayName: String(payload.displayName || existing?.displayName || username),
     userId: typeof payload.userId === 'number' ? payload.userId : existing?.userId,
     avatar: payload.avatar ?? existing?.avatar,
-    gold: typeof payload.gold === 'number' ? payload.gold : existing?.gold ?? 0,
-    gems: typeof payload.gems === 'number' ? payload.gems : existing?.gems ?? 0,
-    level: typeof payload.level === 'number' ? payload.level : existing?.level,
+    gold: preserveStats ? existing!.gold : incomingGold ?? existing?.gold ?? 0,
+    gems: preserveStats ? existing!.gems : incomingGems ?? existing?.gems ?? 0,
+    level: preserveStats ? existing!.level : incomingLevel ?? existing?.level,
     currencyIcons: sanitizeCurrencyIcons(payload.currencyIcons, existing?.currencyIcons),
-    extraStats: sanitizeExtraStats(payload.extraStats, existing?.extraStats),
-    currentStage: sanitizeStage(payload.currentStage, existing?.currentStage),
+    extraStats: preserveStats
+      ? existing!.extraStats
+      : sanitizeExtraStats(payload.extraStats, existing?.extraStats, preserveBag),
+    currentStage: isDisconnected
+      ? existing?.currentStage ?? sanitizeStage(payload.currentStage)
+      : sanitizeStage(payload.currentStage, existing?.currentStage),
     equipped,
     inventory,
     rewards: finalRewards,
@@ -404,6 +537,8 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     normalKindCount,
     ownedUnitsCount,
     lastSyncedAt: now,
+    disconnected: isDisconnected,
+    disconnectInfo,
     scriptVersion:
       typeof payload.scriptVersion === 'string' && payload.scriptVersion.trim()
         ? payload.scriptVersion.trim().slice(0, 24)
