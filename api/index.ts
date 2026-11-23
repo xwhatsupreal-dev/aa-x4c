@@ -238,8 +238,8 @@ interface SyncPayload {
 
 type Req = IncomingMessage & { body?: unknown };
 
-const SCRIPT_VERSION = '2.9.2';
-const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 18:20 น. (เวลาไทย)';
+const SCRIPT_VERSION = '2.9.3';
+const SCRIPT_UPDATED_AT = '23 พ.ย. 2569 · 10:45 น. (เวลาไทย)';
 
 const RARITY_ORDER: Rarity[] = [
   'Secret',
@@ -3754,7 +3754,7 @@ local function mapCurrencyMeta(rawKey, stageName, stageId, stageWorld)
 end
 
 -- 2K v10: ดึงค่าตัวเลขรางวัลจริงจากตาราง payload ของ game_finished (กรองค่า XP สะสมของยูนิต/ไอดี/แบทเทิลพาสออก)
-local NUMTAGS = { "gold", "gem", "troph", "xp", "resource", "token", "pearl", "star", "point", "currency" }
+local NUMTAGS = { "gold", "gem", "troph", "xp", "resource", "token", "pearl", "star", "point", "currency", "summer", "coin", "shard", "ore" }
 local STAT_SKIP = {
 	stats = true, waves_completed = true, time_taken = true, total_damage = true,
 	damage = true, kills = true, takedowns = true, wave = true,
@@ -3771,10 +3771,25 @@ local STAT_SKIP = {
 }
 local BAD_CONTAINER_SUBS = { "unit", "battlepass", "progress", "stat", "damage", "kill", "equip", "team", "level", "leaderboard", "history", "record", "before", "after", "old", "new" }
 local CUMULATIVE_XP_SUBS = { "total", "current", "old", "new", "max", "before", "after", "prev", "next", "req", "need", "start", "end", "unit", "bp", "pass", "bar", "cumul", "lifetime", "all" }
-local REWARD_MAP_NAMES = { rewards = true, reward = true, currencies = true, currency_rewards = true, resources = true, drops = true }
+local REWARD_MAP_NAMES = {
+	rewards = true, reward = true, currencies = true, currency_rewards = true,
+	resources = true, drops = true, event_rewards = true, stage_rewards = true,
+	clear_rewards = true, bonus_rewards = true, player_rewards = true, extra_rewards = true, loot = true,
+}
 
 local function isBadContainerKey(kl)
 	if STAT_SKIP[kl] then return true end
+	if string.find(kl, "reward", 1, true)
+		or string.find(kl, "resource", 1, true)
+		or string.find(kl, "pearl", 1, true)
+		or string.find(kl, "currency", 1, true)
+		or string.find(kl, "drop", 1, true)
+		or string.find(kl, "loot", 1, true)
+		or string.find(kl, "summer", 1, true)
+		or string.find(kl, "event", 1, true)
+		or string.find(kl, "bonus", 1, true) then
+		return false
+	end
 	for _, sub in ipairs(BAD_CONTAINER_SUBS) do
 		if string.find(kl, sub, 1, true) then return true end
 	end
@@ -3853,7 +3868,7 @@ local function extractNums(t, out, seen, depth, budget, parentKey)
 	end
 end
 
--- 2K v10: ดึง item id + จำนวน + Tier จากอากิวเมนต์ event แบบไม่ต้องเดาลำดับ
+-- 2K v10: ดึง item id + จำนวน + Tier จากอากิวเมนต์ event แบบไม่ต้องเดาลำดับ (ป้องกันนับซ้ำ 2 เท่า)
 local function idsFromPacked(packed)
 	local found = {}
 	local function add(id, n, tier)
@@ -3874,11 +3889,12 @@ local function idsFromPacked(packed)
 		if tv == "string" then
 			add(v, 1, nil)
 		elseif tv == "number" then
-			if #found > 0 and v > 0 then found[#found].n = math.floor(v) end
+			if depth == 0 and #found > 0 and v > 0 then found[#found].n = math.floor(v) end
 		elseif tv == "table" then
 			local id = rawget(v, "item_id") or rawget(v, "id")
 			if type(id) == "string" and Items[id] then
 				add(id, rawget(v, "amount") or rawget(v, "quantity") or rawget(v, "qty") or 1, extractItemTier(v, id))
+				return
 			end
 			for k, val in pairs(v) do
 				if type(k) == "string" and Items[k] and type(val) == "number" and val > 0 then
@@ -3900,7 +3916,7 @@ local function idsFromPacked(packed)
 	return found
 end
 
--- 2K v10: ดึงยูนิตที่ได้รับจริงจากอากิวเมนต์ event
+-- 2K v10: ดึงยูนิตที่ได้รับจริงจากอากิวเมนต์ event (ป้องกันนับซ้ำ 2 เท่า)
 local function unitsFromPacked(packed)
 	local found = {}
 	local function addUnit(uid, n)
@@ -3916,6 +3932,7 @@ local function unitsFromPacked(packed)
 		local uid = rawget(v, "unit_id")
 		if type(uid) == "string" and Units[uid] then
 			addUnit(uid, rawget(v, "amount") or rawget(v, "quantity") or 1)
+			return
 		end
 		for k, val in pairs(v) do
 			if type(k) == "string" and Units[k] then
@@ -4005,6 +4022,16 @@ local function bufferEventDrop(kind, id, name, rarity, qty, img, tier)
 	end
 end
 
+local function isCurrentlyInLobby(st)
+	st = st or Hub.Stage
+	if type(st) ~= "table" then return true end
+	if st.inLobby == true then return true end
+	local nm = tostring(st.name or "")
+	local wd = tostring(st.world or ""):lower()
+	local mp = tostring(st.map or ""):lower()
+	return nm == "" or nm == "?" or nm == "ล็อบบี้" or nm:lower() == "lobby" or wd == "lobby" or mp == "lobby"
+end
+
 local function onRealItemOrDropEvent(tag, packed)
 	pushRaw(tag, packed)
 	local items = idsFromPacked(packed)
@@ -4087,6 +4114,9 @@ local function onRealItemOrDropEvent(tag, packed)
 		return
 	end
 
+	-- ถ้าอยู่ในล็อบบี้ (เช่น เปิดแคปซูล/สุ่มสกิน/รับเควส) ไม่เก็บเข้าบัฟเฟอร์จบด่าน ป้องกันแจ้งเป็น "จบด่าน ล็อบบี้" ตอนย้ายเซิฟ
+	if isCurrentlyInLobby(Hub.Stage) then return end
+
 	-- ระหว่างด่าน: บัฟเฟอร์เงียบๆ รอรวมส่งทีเดียวตอน game_finished
 	for _, b in ipairs(extracted) do
 		bufferEventDrop(b.kind, b.id, b.name, b.rarity, b.qty, b.img, b.tier)
@@ -4162,10 +4192,8 @@ local function onGameFinished(payload)
 		end
 
 		local rows, seenNum = {}, {}
-		local foundExplicitRewards = false
-		for _, rKey in ipairs({ "rewards", "reward", "currency_rewards", "currencies", "drops" }) do
+		for _, rKey in ipairs({ "rewards", "reward", "resources", "currency_rewards", "currencies", "event_rewards", "drops" }) do
 			if type(payload[rKey]) == "table" then
-				foundExplicitRewards = true
 				extractNums(payload[rKey], rows, seenNum, 0, { n = 0 }, rKey)
 			end
 		end
@@ -4178,9 +4206,7 @@ local function onGameFinished(payload)
 				end
 			end
 		end
-		if not foundExplicitRewards and #rows == 0 then
-			extractNums(payload, rows, seenNum, 0, { n = 0 }, "")
-		end
+		extractNums(payload, rows, seenNum, 0, { n = 0 }, "")
 		table.sort(rows, function(a, b) return a.val > b.val end)
 		local curTotalXp = safeNum(Hub.Stats and Hub.Stats.player_xp)
 		for _, r in ipairs(rows) do
@@ -4280,8 +4306,16 @@ end
 pcall(function()
 	conn(LP.OnTeleport:Connect(function(state)
 		if state == Enum.TeleportState.Started or state == Enum.TeleportState.InProgress then
+			local st = Hub.Stage or {}
+			if isCurrentlyInLobby(st) then
+				Hub.PendingDrops = {}
+				return
+			end
+			if Hub.LastFinishAt and (os.clock() - Hub.LastFinishAt) <= 15 then
+				Hub.PendingDrops = {}
+				return
+			end
 			if next(Hub.PendingDrops) ~= nil then
-				local st = Hub.Stage or {}
 				Hub.RunSeq = Hub.RunSeq + 1
 				local runId = tostring(os.time()) .. "_" .. tostring(Hub.RunSeq)
 				local nowClock = clock()

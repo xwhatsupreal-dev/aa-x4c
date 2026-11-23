@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.9.2';
-export const SCRIPT_UPDATED_AT = '22 พ.ย. 2569 · 18:20 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.9.3';
+export const SCRIPT_UPDATED_AT = '23 พ.ย. 2569 · 10:45 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,15 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.9.3',
+    updatedAt: '23 พ.ย. 2569 · 10:45 น. (เวลาไทย)',
+    highlights: [
+      'แก้บั๊ก "จบด่าน ล็อบบี้" ที่เกิดจากการเปิดแคปซูล/สุ่มสกินในล็อบบี้แล้วระบบดึงขึ้นเป็นรางวัลจบด่านตอนวาร์ปเข้าด่าน',
+      'แก้บั๊กนับจำนวนไอเทมและยูนิตเบิ้ล 2 เท่า (เช่น Sky Portal +2 หรือสกินจากแคปซูลคูณ 2) ให้ตรงตามจำนวนที่ดรอปจริง 100%',
+      'คืนค่าการจับ Summer Pearls ตอนจบด่าน Event Summer ให้กลับมาครบทุกรอบ โดยยังคงกรอง XP สะสมหลักล้านออกเหมือนเดิม',
+    ],
+  },
   {
     version: '2.9.2',
     updatedAt: '22 พ.ย. 2569 · 18:20 น. (เวลาไทย)',
