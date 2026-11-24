@@ -503,9 +503,7 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
     }
   }
 
-  const MAX_DROP_HISTORY_RUNS = 15;
-  const combinedRewards = [...newlyAdded, ...mergedRewards].sort((a, b) => b.ts - a.ts);
-  const finalRewards = pruneRewardsToMaxRuns(combinedRewards, MAX_DROP_HISTORY_RUNS);
+  const finalRewards = [...newlyAdded, ...mergedRewards].sort((a, b) => b.ts - a.ts);
   const totals = recomputeTotals(finalRewards);
 
   const uniqueCount = preserveBag
@@ -563,44 +561,6 @@ function buildSnapshotFromPayload(payload: SyncPayload, existing?: AccountSnapsh
         : existing?.syncIntervalSec,
     source: 'lua',
   };
-}
-
-const MAX_DROP_HISTORY_RUNS_LIMIT = 15;
-
-function pruneRewardsToMaxRuns(
-  rewards: RewardEntry[],
-  maxRuns = MAX_DROP_HISTORY_RUNS_LIMIT
-): RewardEntry[] {
-  const sorted = [...rewards].sort((a, b) => b.ts - a.ts);
-  const allowedRunIds = new Set<string>();
-  let runCount = 0;
-  let lastLegacy: { src: string; ts: number } | null = null;
-  const kept: RewardEntry[] = [];
-
-  for (const r of sorted) {
-    if (r.runId) {
-      if (allowedRunIds.has(r.runId)) {
-        kept.push(r);
-      } else if (runCount < maxRuns) {
-        allowedRunIds.add(r.runId);
-        runCount += 1;
-        kept.push(r);
-      }
-      continue;
-    }
-    const sameLegacy =
-      lastLegacy !== null &&
-      lastLegacy.src === r.src &&
-      Math.abs(lastLegacy.ts - r.ts) <= 15_000;
-    if (sameLegacy) {
-      kept.push(r);
-    } else if (runCount < maxRuns) {
-      runCount += 1;
-      lastLegacy = { src: r.src, ts: r.ts };
-      kept.push(r);
-    }
-  }
-  return kept;
 }
 
 function recomputeTotals(rewards: RewardEntry[]): Record<string, RewardTotal> {
@@ -924,15 +884,7 @@ async function startServer() {
       return;
     }
     const room = store.rooms[syncKey] || {};
-    const accounts = Object.values(room)
-      .map((acc) => {
-        const pruned = pruneRewardsToMaxRuns(acc.rewards || [], MAX_DROP_HISTORY_RUNS_LIMIT);
-        if (pruned.length !== (acc.rewards?.length ?? 0)) {
-          return { ...acc, rewards: pruned, totals: recomputeTotals(pruned) };
-        }
-        return acc;
-      })
-      .sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
+    const accounts = Object.values(room).sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
     res.json({
       syncKey,
       accounts,

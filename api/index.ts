@@ -238,8 +238,8 @@ interface SyncPayload {
 
 type Req = IncomingMessage & { body?: unknown };
 
-const SCRIPT_VERSION = '2.9.4';
-const SCRIPT_UPDATED_AT = '24 พ.ย. 2569 · 05:55 น. (เวลาไทย)';
+const SCRIPT_VERSION = '2.9.5';
+const SCRIPT_UPDATED_AT = '24 พ.ย. 2569 · 08:30 น. (เวลาไทย)';
 
 const RARITY_ORDER: Rarity[] = [
   'Secret',
@@ -795,7 +795,7 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
     }
   }
 
-  const finalRewards = pruneRewardsToMaxRuns([...newlyAdded, ...mergedRewards], MAX_DROP_HISTORY_RUNS);
+  const finalRewards = [...newlyAdded, ...mergedRewards].sort((a, b) => b.ts - a.ts);
   const totals = recomputeTotals(finalRewards);
 
   const uniqueCount = preserveBag
@@ -853,44 +853,6 @@ function buildSnapshot(payload: SyncPayload, existing?: AccountSnapshot): Accoun
         : existing?.syncIntervalSec,
     source: 'lua',
   };
-}
-
-const MAX_DROP_HISTORY_RUNS = 15;
-
-function pruneRewardsToMaxRuns(
-  rewards: RewardEntry[],
-  maxRuns = MAX_DROP_HISTORY_RUNS
-): RewardEntry[] {
-  const sorted = [...rewards].sort((a, b) => b.ts - a.ts);
-  const allowedRunIds = new Set<string>();
-  let runCount = 0;
-  let lastLegacy: { src: string; ts: number } | null = null;
-  const kept: RewardEntry[] = [];
-
-  for (const r of sorted) {
-    if (r.runId) {
-      if (allowedRunIds.has(r.runId)) {
-        kept.push(r);
-      } else if (runCount < maxRuns) {
-        allowedRunIds.add(r.runId);
-        runCount += 1;
-        kept.push(r);
-      }
-      continue;
-    }
-    const sameLegacy =
-      lastLegacy !== null &&
-      lastLegacy.src === r.src &&
-      Math.abs(lastLegacy.ts - r.ts) <= 15_000;
-    if (sameLegacy) {
-      kept.push(r);
-    } else if (runCount < maxRuns) {
-      runCount += 1;
-      lastLegacy = { src: r.src, ts: r.ts };
-      kept.push(r);
-    }
-  }
-  return kept;
 }
 
 function recomputeTotals(rewards: RewardEntry[]): Record<string, RewardTotal> {
@@ -2019,13 +1981,13 @@ function Hub.Render()
 			local rk = rw.runId and tostring(rw.runId) or tostring(rw.ts or rw.t)
 			if not runSeen[rk] then runSeen[rk] = true; runTotal = runTotal + 1 end
 		end
-		addHeader("ประวัติของดรอปตอนจบด่าน (" .. runTotal .. "/15 รายการ)", Color3.fromRGB(16, 245, 160))
+		addHeader("ประวัติของดรอปตอนจบด่าน (" .. runTotal .. " รายการ)", Color3.fromRGB(16, 245, 160))
 		if #Hub.Rewards == 0 then
 			addNote("ระบบจะไม่แจ้งทีละชิ้นระหว่างด่านยังไม่จบ — เมื่อจบด่านแล้วจะสรุป Gold/Gems/XP/Token + ไอเทม + ยูนิตพร้อมชื่อด่านและรูปส่งเข้าเว็บทีเดียวครับ")
 		end
 		local budget = 12
 		local lastRunId, order = nil, 0
-		for i = 1, math.min(#Hub.Rewards, 120) do
+		for i = 1, math.min(#Hub.Rewards, 300) do
 			local e = Hub.Rewards[i]
 			if e.runId and e.runId ~= lastRunId then
 				lastRunId = e.runId
@@ -3516,7 +3478,7 @@ local function buildPayloadJson()
 	end
 
 	local recentRewards = {}
-	for i = 1, math.min(#Hub.Rewards, 120) do
+	for i = 1, math.min(#Hub.Rewards, 500) do
 		local r = Hub.Rewards[i]
 		recentRewards[#recentRewards + 1] = {
 			t = r.t,
@@ -4074,20 +4036,8 @@ local function unitsFromPacked(packed)
 	return found
 end
 
--- เก็บประวัติของดรอปไว้ไม่เกิน 15 รอบล่าสุด ส่วนอันเก่าที่เกินลบออกทันที
-local function pruneRewardsTo15()
-	local keptRewards, seenRuns, runCount = {}, {}, 0
-	for _, rw in ipairs(Hub.Rewards) do
-		local rk = rw.runId and tostring(rw.runId) or (tostring(rw.ts or rw.t) .. "|" .. tostring(rw.id))
-		if seenRuns[rk] then
-			keptRewards[#keptRewards + 1] = rw
-		elseif runCount < 15 then
-			seenRuns[rk] = true
-			runCount = runCount + 1
-			keptRewards[#keptRewards + 1] = rw
-		end
-	end
-	Hub.Rewards = keptRewards
+-- คำนวณยอดรวมของดรอปทั้งหมดโดยไม่ตัดจำนวนรอบ
+local function recomputeHubTotals()
 	Hub.Totals = {}
 	for _, rw in ipairs(Hub.Rewards) do
 		local tk = tostring(rw.kind) .. "|" .. tostring(rw.id) .. "|" .. tostring(rw.tier or "")
@@ -4235,7 +4185,7 @@ local function onRealItemOrDropEvent(tag, packed)
 			end
 		end
 		if addedAny then
-			pruneRewardsTo15()
+			recomputeHubTotals()
 			Hub.UnsentRewards = true
 			Hub.PendingQueueSeq = Hub.PendingQueueSeq + 1
 			savePendingRunsQueue(queuedEntries)
@@ -4413,7 +4363,7 @@ local function onGameFinished(payload)
 				table.insert(Hub.Rewards, 1, row)
 				newRunRows[#newRunRows + 1] = row
 			end
-			pruneRewardsTo15()
+			recomputeHubTotals()
 			Hub.UnsentRewards = true
 			Hub.PendingQueueSeq = Hub.PendingQueueSeq + 1
 			savePendingRunsQueue(newRunRows)
@@ -4497,7 +4447,7 @@ pcall(function()
 					flushRows[#flushRows + 1] = row
 				end
 				Hub.PendingDrops = {}
-				pruneRewardsTo15()
+				recomputeHubTotals()
 				Hub.UnsentRewards = true
 				Hub.PendingQueueSeq = Hub.PendingQueueSeq + 1
 				savePendingRunsQueue(flushRows)
@@ -4959,7 +4909,7 @@ end)
 task.spawn(function()
 	local restoredCount = restorePendingRunsQueue()
 	if restoredCount > 0 then
-		pruneRewardsTo15()
+		recomputeHubTotals()
 	end
 	local waitedLoad = 0
 	while Hub.Running and not Hub.Disconnected and waitedLoad < 12 do
@@ -5566,15 +5516,7 @@ export default async function handler(req: Req, res: ServerResponse) {
     if (req.method === 'GET' && pathname === '/api/accounts') {
       const syncKey = sanitizeKey(parsedUrl.searchParams.get('key'));
       const room = await loadRoomWithMigration(syncKey);
-      const accounts = Object.values(room)
-        .map((acc) => {
-          const pruned = pruneRewardsToMaxRuns(acc.rewards || [], MAX_DROP_HISTORY_RUNS);
-          if (pruned.length !== (acc.rewards?.length ?? 0)) {
-            return { ...acc, rewards: pruned, totals: recomputeTotals(pruned) };
-          }
-          return acc;
-        })
-        .sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
+      const accounts = Object.values(room).sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
       sendJson(res, {
         syncKey,
         accounts,

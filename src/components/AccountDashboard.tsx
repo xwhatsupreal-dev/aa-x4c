@@ -257,9 +257,7 @@ export function AccountDashboard({
     [account.inventory]
   );
 
-  // Group stage-clear drops by runId (1 completed stage run = 1 bundled row), capped at 15 latest entries
-  const MAX_DROP_HISTORY_RUNS = 15;
-
+  // Group stage-clear drops by runId (1 completed stage run = 1 bundled row)
   const allDropBatches = useMemo<DropBatch[]>(() => {
     const batches: DropBatch[] = [];
     const runMap = new Map<string, DropBatch>();
@@ -278,7 +276,6 @@ export function AccountDashboard({
           }
           continue;
         }
-        if (batches.length >= MAX_DROP_HISTORY_RUNS) continue;
         const info = SOURCE_INFO[r.src] || { label: 'รางวัลจบด่าน', short: 'จบด่าน' };
         const batch: DropBatch = {
           id: `run-${r.runId}`,
@@ -319,7 +316,6 @@ export function AccountDashboard({
           prev.topRarity = r.rarity;
         }
       } else {
-        if (batches.length >= MAX_DROP_HISTORY_RUNS) continue;
         const info = SOURCE_INFO[r.src] || {
           label: r.src || 'ได้รับไอเทม',
           short: 'ดรอป',
@@ -345,7 +341,7 @@ export function AccountDashboard({
         });
       }
     }
-    return batches.slice(0, MAX_DROP_HISTORY_RUNS);
+    return batches;
   }, [account.rewards]);
 
   const dropBatches = useMemo<DropBatch[]>(() => {
@@ -1663,7 +1659,7 @@ export function AccountDashboard({
                     <strong className="text-white font-semibold">
                       {dropBatches.length}
                     </strong>{' '}
-                    / {MAX_DROP_HISTORY_RUNS} รายการล่าสุด
+                    รายการทั้งหมด
                   </span>
                   {(dropOutcomeCounts.wins > 0 || dropOutcomeCounts.losses > 0) && (
                     <>

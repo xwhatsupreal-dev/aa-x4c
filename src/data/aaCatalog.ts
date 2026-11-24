@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.9.4';
-export const SCRIPT_UPDATED_AT = '24 พ.ย. 2569 · 05:55 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.9.5';
+export const SCRIPT_UPDATED_AT = '24 พ.ย. 2569 · 08:30 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,13 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.9.5',
+    updatedAt: '24 พ.ย. 2569 · 08:30 น. (เวลาไทย)',
+    highlights: [
+      'ยกเลิกการจำกัดประวัติของดรอปไว้ที่ 15 รายการ — เก็บและแสดงประวัติจบด่านทั้งหมดต่อเนื่องทั้งบนเว็บ, ในฐานข้อมูล/API และในหน้าต่างสคริปต์ในเกม (ลบเฉพาะตอนกดปุ่ม "ล้างประวัติ")',
+    ],
+  },
   {
     version: '2.9.4',
     updatedAt: '24 พ.ย. 2569 · 05:55 น. (เวลาไทย)',

@@ -240,7 +240,7 @@ function buildSnapshot(payload, existing) {
     }
   }
 
-  const finalRewards = pruneRewardsToMaxRuns([...newlyAdded, ...mergedRewards], 15);
+  const finalRewards = [...newlyAdded, ...mergedRewards].sort((a, b) => b.ts - a.ts);
   const totals = recomputeTotals(finalRewards);
 
   const uniqueCount = preserveBag
@@ -293,39 +293,6 @@ function buildSnapshot(payload, existing) {
         : existing?.syncIntervalSec,
     source: 'lua',
   };
-}
-
-function pruneRewardsToMaxRuns(rewards, maxRuns = 15) {
-  const sorted = [...(Array.isArray(rewards) ? rewards : [])].sort((a, b) => b.ts - a.ts);
-  const allowedRunIds = new Set();
-  let runCount = 0;
-  let lastLegacy = null;
-  const kept = [];
-
-  for (const r of sorted) {
-    if (r.runId) {
-      if (allowedRunIds.has(r.runId)) {
-        kept.push(r);
-      } else if (runCount < maxRuns) {
-        allowedRunIds.add(r.runId);
-        runCount += 1;
-        kept.push(r);
-      }
-      continue;
-    }
-    const sameLegacy =
-      lastLegacy !== null &&
-      lastLegacy.src === r.src &&
-      Math.abs(lastLegacy.ts - r.ts) <= 15000;
-    if (sameLegacy) {
-      kept.push(r);
-    } else if (runCount < maxRuns) {
-      runCount += 1;
-      lastLegacy = { src: r.src, ts: r.ts };
-      kept.push(r);
-    }
-  }
-  return kept;
 }
 
 function recomputeTotals(rewards) {
@@ -390,15 +357,7 @@ export default {
         if (!syncKey) return jsonResponse({ syncKey: '', accounts: [] });
         const raw = await kv.get(\`room:\${syncKey}\`, 'json');
         const room = raw && typeof raw === 'object' ? raw : {};
-        const accounts = Object.values(room)
-          .map((acc) => {
-            const pruned = pruneRewardsToMaxRuns(acc.rewards || [], 15);
-            if (pruned.length !== (acc.rewards?.length || 0)) {
-              return { ...acc, rewards: pruned, totals: recomputeTotals(pruned) };
-            }
-            return acc;
-          })
-          .sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
+        const accounts = Object.values(room).sort((a, b) => b.lastSyncedAt - a.lastSyncedAt);
         return jsonResponse({ syncKey, accounts });
       }
 
