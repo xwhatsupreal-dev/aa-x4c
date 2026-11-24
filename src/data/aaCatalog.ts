@@ -155,8 +155,8 @@ export function formatRelativeTime(ts: number, now = Date.now()): string {
 
 export const ONLINE_THRESHOLD_MS = 65_000;
 
-export const SCRIPT_VERSION = '2.9.3';
-export const SCRIPT_UPDATED_AT = '23 พ.ย. 2569 · 10:45 น. (เวลาไทย)';
+export const SCRIPT_VERSION = '2.9.4';
+export const SCRIPT_UPDATED_AT = '24 พ.ย. 2569 · 05:55 น. (เวลาไทย)';
 
 export interface ScriptReleaseNote {
   version: string;
@@ -165,6 +165,15 @@ export interface ScriptReleaseNote {
 }
 
 export const SCRIPT_CHANGELOG: ScriptReleaseNote[] = [
+  {
+    version: '2.9.4',
+    updatedAt: '24 พ.ย. 2569 · 05:55 น. (เวลาไทย)',
+    highlights: [
+      'แก้บั๊กกำลังย้ายเซิร์ฟเวอร์ (Teleport) แล้วขึ้น "หลุดเกม" — ตรวจสถานะ OnTeleport + กรองหน้าต่างที่ซ่อนอยู่/ข้อความ Teleport + รอยืนยัน 2.5 วินาทีก่อนแจ้งหลุด และกู้คืนสถานะออนไลน์อัตโนมัติถ้าหน้าต่างหายไป',
+      'แก้บั๊กบางรอบไม่ยอมส่งตอนจบด่าน — ใช้ WaitForChild + ChildAdded รอ Hook อีเวนต์เกมให้ติด 100% แม้ใช้ Auto-Execute เข้าเซิร์ฟเร็วกว่าเกมโหลด',
+      'เพิ่มระบบลองส่งซ้ำอัตโนมัติ 3 ครั้ง + บันทึกคิวจบด่านลงไฟล์เครื่อง (AAVault_PendingRuns) เพื่อส่งตามให้ทันทีในเซิร์ฟถัดไปถ้ามาโครกดย้ายด่าน/รีเพลย์ตัดหน้าตอนกำลังส่ง',
+    ],
+  },
   {
     version: '2.9.3',
     updatedAt: '23 พ.ย. 2569 · 10:45 น. (เวลาไทย)',

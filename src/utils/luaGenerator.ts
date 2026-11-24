@@ -705,6 +705,15 @@ local Hub = {
 	Disconnected = false,
 	DisconnectInfo = nil,
 	DisconnectSentKey = nil,
+	PendingDisconnectKey = nil,
+	PendingDisconnectToken = 0,
+	ClearPromptStreak = 0,
+	Teleporting = false,
+	TeleportStartedAt = 0,
+	TeleportGraceUntil = 0,
+	UnsentRewards = false,
+	PendingQueueSeq = 0,
+	HookedEvents = {},
 	Profile = nil,
 	CurrencyIcons = {
 		gold = "rbxassetid://100751534594369",
@@ -728,6 +737,8 @@ local TweenService = game:GetService("TweenService")
 local AssetService = game:GetService("AssetService")
 local ContentProvider = game:GetService("ContentProvider")
 local GuiService = game:GetService("GuiService")
+local TeleportService = nil
+pcall(function() TeleportService = game:GetService("TeleportService") end)
 local CoreGui = nil
 pcall(function() CoreGui = game:GetService("CoreGui") end)
 local LP = Players.LocalPlayer
@@ -790,8 +801,92 @@ local httpRequest =
 
 local getGC = (type(getgc) == "function" and getgc) or nil
 local copyClip = setclipboard or toclipboard or (syn and syn.write_clipboard) or nil
-local saveFile = writefile or nil
+local saveFile = (type(writefile) == "function" and writefile) or nil
+local loadFile = (type(readfile) == "function" and readfile) or nil
+local hasFile = (type(isfile) == "function" and isfile) or nil
+local removeFile = (type(delfile) == "function" and delfile) or nil
+local PENDING_RUNS_FILE = "AAVault_PendingRuns_" .. tostring(LP.Name) .. ".json"
 local BASE_API = WEB_URL:gsub("/api/sync.*$", "")
+
+local function savePendingRunsQueue(entries)
+	if not saveFile or type(entries) ~= "table" or #entries == 0 then return end
+	pcall(function()
+		local existing = {}
+		if loadFile and (not hasFile or hasFile(PENDING_RUNS_FILE)) then
+			local okR, raw = pcall(loadFile, PENDING_RUNS_FILE)
+			if okR and type(raw) == "string" and #raw > 2 then
+				local okD, dec = pcall(function() return HttpService:JSONDecode(raw) end)
+				if okD and type(dec) == "table" then existing = dec end
+			end
+		end
+		local merged, seen = {}, {}
+		local function pushList(list)
+			for _, r in ipairs(list) do
+				if type(r) == "table" and r.id then
+					local key = tostring(r.runId or r.ts or r.t) .. "|" .. tostring(r.kind) .. "|" .. tostring(r.id) .. "|" .. tostring(r.tier or "")
+					if not seen[key] then
+						seen[key] = true
+						merged[#merged + 1] = {
+							t = r.t, ts = r.ts, kind = r.kind, id = r.id, name = r.name,
+							rarity = r.rarity, qty = r.qty, src = r.src, iconId = r.iconId,
+							tier = r.tier, runId = r.runId, stageName = r.stageName,
+							stageWorld = r.stageWorld, stageMap = r.stageMap,
+							stageDifficulty = r.stageDifficulty, stageGamemode = r.stageGamemode,
+							stageWaves = r.stageWaves, stageTimer = r.stageTimer,
+							stageImageId = r.stageImageId,
+						}
+					end
+				end
+			end
+		end
+		pushList(entries)
+		pushList(existing)
+		while #merged > 80 do table.remove(merged) end
+		saveFile(PENDING_RUNS_FILE, HttpService:JSONEncode(merged))
+	end)
+end
+
+local function clearPendingRunsQueue()
+	if removeFile then
+		pcall(function()
+			if not hasFile or hasFile(PENDING_RUNS_FILE) then removeFile(PENDING_RUNS_FILE) end
+		end)
+	elseif saveFile then
+		pcall(saveFile, PENDING_RUNS_FILE, "[]")
+	end
+end
+
+local function restorePendingRunsQueue()
+	if not loadFile then return 0 end
+	local count = 0
+	pcall(function()
+		if hasFile and not hasFile(PENDING_RUNS_FILE) then return end
+		local okR, raw = pcall(loadFile, PENDING_RUNS_FILE)
+		if not okR or type(raw) ~= "string" or #raw < 3 then return end
+		local okD, dec = pcall(function() return HttpService:JSONDecode(raw) end)
+		if not okD or type(dec) ~= "table" or #dec == 0 then return end
+		local seen = {}
+		for _, rw in ipairs(Hub.Rewards) do
+			seen[tostring(rw.runId or rw.ts or rw.t) .. "|" .. tostring(rw.kind) .. "|" .. tostring(rw.id) .. "|" .. tostring(rw.tier or "")] = true
+		end
+		for i = #dec, 1, -1 do
+			local r = dec[i]
+			if type(r) == "table" and r.id then
+				local k = tostring(r.runId or r.ts or r.t) .. "|" .. tostring(r.kind) .. "|" .. tostring(r.id) .. "|" .. tostring(r.tier or "")
+				if not seen[k] then
+					seen[k] = true
+					table.insert(Hub.Rewards, 1, r)
+					count = count + 1
+				end
+			end
+		end
+		if count > 0 then
+			Hub.UnsentRewards = true
+			Hub.PendingQueueSeq = Hub.PendingQueueSeq + 1
+		end
+	end)
+	return count
+end
 
 local B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local nativeB64 =
@@ -2139,7 +2234,7 @@ function Hub.SyncToWeb(force, reason)
 		pcall(Hub.Render)
 		return
 	end
-	local isUrgent = (reason == "stage_clear" or reason == "game_finished" or reason == "teleport_flush" or isDisconnect)
+	local isUrgent = (reason == "stage_clear" or reason == "game_finished" or reason == "teleport_flush" or reason == "pending_flush" or isDisconnect)
 	-- เหตุการณ์ด่วน (จบด่าน / กำลังย้ายด่าน / หลุดเกม) ยิงทันทีไม่รอ SyncInFlight กันพลาดตอนกดเปลี่ยนด่านไว
 	if not isUrgent and Hub.SyncInFlight and (os.clock() - Hub.SyncStartedAt) < 20 then
 		return
@@ -2151,6 +2246,7 @@ function Hub.SyncToWeb(force, reason)
 		Hub.SyncStartedAt = os.clock()
 	end
 	Hub.LastSync = os.clock()
+	local queueSeqAtBuild = Hub.PendingQueueSeq
 
 	-- เตรียม JSON ทันทีตั้งแต่ตอนนี้ (กันข้อมูลหล่นถ้าผู้เล่นกดเปลี่ยนด่าน/รีเพลย์ต่อทันที)
 	local buildOk, prebuiltJson = pcall(buildPayloadJson)
@@ -2162,36 +2258,64 @@ function Hub.SyncToWeb(force, reason)
 	end
 
 	task.spawn(function()
-		local ok, err = pcall(function()
-			local json = prebuiltJson
-			if saveFile then pcall(saveFile, "AAVault_" .. LP.Name .. ".json", json) end
-			local res = httpRequest({
-				Url = WEB_URL,
-				Method = "POST",
-				Headers = {
-					["Content-Type"] = "application/json",
-					["Accept"] = "application/json",
-				},
-				Body = json,
-			})
-			local rawCode = res and (res.StatusCode or res.status_code or res.Status or res.status)
-			local code = tonumber(rawCode) or 0
-			local body = res and tostring(res.Body or res.body or "") or ""
-			local successFlag = res and (res.Success == true or res.success == true)
-			local bodyOk = body:find('"ok"') ~= nil
-			if (code >= 200 and code < 300 and bodyOk) or (successFlag and bodyOk) then
-				Hub.SyncOk = true
-				Hub.HttpBlocked = false
-				Hub.FailStreak = 0
-				Hub.FailNotified = false
-				Hub.SyncCount = Hub.SyncCount + 1
-				if isDisconnect then
-					local errCodeStr = Hub.DisconnectInfo and Hub.DisconnectInfo.errorCode
-					Hub.SyncStatus = "แจ้งหลุดเกมแล้ว (" .. (errCodeStr and ("Code " .. tostring(errCodeStr)) or "ออฟไลน์") .. ") • " .. clock()
-					return
+		local maxAttempts = (isUrgent and not isDisconnect) and 3 or 1
+		local delivered = false
+		local lastCode = 0
+		local lastBody = ""
+		local lastErr = nil
+
+		for attempt = 1, maxAttempts do
+			if not Hub.Running then break end
+			if attempt > 1 then
+				task.wait(attempt == 2 and 1.4 or 3.0)
+				if not Hub.Running then break end
+			end
+			local ok, err = pcall(function()
+				local json = prebuiltJson
+				if attempt == 1 and saveFile then pcall(saveFile, "AAVault_" .. LP.Name .. ".json", json) end
+				local res = httpRequest({
+					Url = WEB_URL,
+					Method = "POST",
+					Headers = {
+						["Content-Type"] = "application/json",
+						["Accept"] = "application/json",
+					},
+					Body = json,
+				})
+				local rawCode = res and (res.StatusCode or res.status_code or res.Status or res.status)
+				lastCode = tonumber(rawCode) or 0
+				lastBody = res and tostring(res.Body or res.body or "") or ""
+				local successFlag = res and (res.Success == true or res.success == true)
+				local bodyOk = lastBody:find('"ok"') ~= nil
+				if (lastCode >= 200 and lastCode < 300 and bodyOk) or (successFlag and bodyOk) then
+					delivered = true
 				end
+			end)
+			if not ok then
+				lastErr = err
+			end
+			if delivered then break end
+			if lastCode == 302 or lastCode == 401 or lastCode == 403 or lastBody:find("cookie_check") or lastBody:find("accounts.google.com") then
+				break
+			end
+		end
+
+		if delivered then
+			Hub.SyncOk = true
+			Hub.HttpBlocked = false
+			Hub.FailStreak = 0
+			Hub.FailNotified = false
+			Hub.SyncCount = Hub.SyncCount + 1
+			if Hub.PendingQueueSeq == queueSeqAtBuild then
+				Hub.UnsentRewards = false
+				clearPendingRunsQueue()
+			end
+			if isDisconnect then
+				local errCodeStr = Hub.DisconnectInfo and Hub.DisconnectInfo.errorCode
+				Hub.SyncStatus = "แจ้งหลุดเกมแล้ว (" .. (errCodeStr and ("Code " .. tostring(errCodeStr)) or "ออฟไลน์") .. ") • " .. clock()
+			else
 				local latestVer = SCRIPT_VERSION
-				local decOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
+				local decOk, decoded = pcall(function() return HttpService:JSONDecode(lastBody) end)
 				if decOk and type(decoded) == "table" and type(decoded.latestScriptVersion) == "string" and decoded.latestScriptVersion ~= "" then
 					latestVer = decoded.latestScriptVersion
 				end
@@ -2205,33 +2329,35 @@ function Hub.SyncToWeb(force, reason)
 				else
 					Hub.SyncStatus = "ออนไลน์ • เช็คทุก " .. AUTO_SYNC_SEC .. " วิ (#" .. Hub.SyncCount .. " • " .. clock() .. ")"
 				end
-			elseif code == 302 or code == 401 or code == 403 or body:find("cookie_check") or body:find("accounts.google.com") then
-				Hub.SyncOk = false
-				Hub.HttpBlocked = true
-				Hub.SyncStatus = "ติดล็อก Preview/Auth (HTTP " .. tostring(code) .. ") — ใช้ลิงก์ Vercel จริง"
-				pcall(function() Hub.Toast("info", "ติดล็อก Preview (HTTP " .. tostring(code) .. ")", "ใช้ลิงก์ Vercel จริงหรือกดปุ่มคัดลอก", Color3.fromRGB(180, 110, 255), nil) end)
+			end
+		elseif lastCode == 302 or lastCode == 401 or lastCode == 403 or lastBody:find("cookie_check") or lastBody:find("accounts.google.com") then
+			Hub.SyncOk = false
+			Hub.HttpBlocked = true
+			Hub.SyncStatus = "ติดล็อก Preview/Auth (HTTP " .. tostring(lastCode) .. ") — ใช้ลิงก์ Vercel จริง"
+			pcall(function() Hub.Toast("info", "ติดล็อก Preview (HTTP " .. tostring(lastCode) .. ")", "ใช้ลิงก์ Vercel จริงหรือกดปุ่มคัดลอก", Color3.fromRGB(180, 110, 255), nil) end)
+		else
+			Hub.SyncOk = false
+			Hub.FailStreak = Hub.FailStreak + 1
+			if isUrgent and not isDisconnect then
+				Hub.UnsentRewards = true
+			end
+			if lastErr and lastCode == 0 then
+				Hub.SyncStatus = "Err: " .. tostring(lastErr):gsub("[%c]+", " "):sub(1, 44)
 			else
-				Hub.SyncOk = false
-				Hub.FailStreak = Hub.FailStreak + 1
 				local serverErr = nil
-				local decOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
+				local decOk, decoded = pcall(function() return HttpService:JSONDecode(lastBody) end)
 				if decOk and type(decoded) == "table" and type(decoded.error) == "string" and decoded.error ~= "" then
 					serverErr = decoded.error
 				end
-				local isQuotaOrServer = code >= 500 or code == 429 or body:find("Error 1101") ~= nil
+				local isQuotaOrServer = lastCode >= 500 or lastCode == 429 or lastBody:find("Error 1101") ~= nil
 				local toastSub = serverErr and serverErr:sub(1, 70)
 					or (isQuotaOrServer and "เซิร์ฟเวอร์ขัดข้อง — เช็ค Upstash Redis / โควต้า KV บน Vercel" or "เช็ค URL หรือกดปุ่มคัดลอกเข้าเว็บ")
-				Hub.SyncStatus = "HTTP " .. tostring(code) .. " • ลองใหม่ใน " .. AUTO_SYNC_SEC .. " วิ"
+				Hub.SyncStatus = "HTTP " .. tostring(lastCode) .. " • ลองใหม่อัตโนมัติ"
 				if not Hub.FailNotified then
 					Hub.FailNotified = true
-					pcall(function() Hub.Toast("info", "ส่งเข้าเว็บไม่สำเร็จ HTTP " .. tostring(code), toastSub, Color3.fromRGB(255, 120, 90), nil) end)
+					pcall(function() Hub.Toast("info", "ส่งเข้าเว็บไม่สำเร็จ HTTP " .. tostring(lastCode), toastSub, Color3.fromRGB(255, 120, 90), nil) end)
 				end
 			end
-		end)
-		if not ok then
-			Hub.SyncOk = false
-			Hub.FailStreak = Hub.FailStreak + 1
-			Hub.SyncStatus = "Err: " .. tostring(err):gsub("[%c]+", " "):sub(1, 44)
 		end
 		if not isUrgent then Hub.SyncInFlight = false end
 		pcall(Hub.Render)
@@ -2602,10 +2728,11 @@ local function onRealItemOrDropEvent(tag, packed)
 		}
 	end
 
-	-- หากเพิ่งจบด่านไม่เกิน 6 วินาที ให้แนบเข้า run ล่าสุดทันทีแล้วซิงค์ขึ้นเว็บเลย (กัน event ของรางวัลตามหลัง game_finished)
-	if Hub.LastFinishRunId and (os.clock() - Hub.LastFinishAt) <= 6 and Hub.LastFinishMeta then
+	-- หากเพิ่งจบด่านไม่เกิน 10 วินาที ให้แนบเข้า run ล่าสุดทันทีแล้วซิงค์ขึ้นเว็บเลย (กัน event ของรางวัลตามหลัง game_finished)
+	if Hub.LastFinishRunId and (os.clock() - Hub.LastFinishAt) <= 10 and Hub.LastFinishMeta then
 		local meta = Hub.LastFinishMeta
 		local addedAny = false
+		local queuedEntries = {}
 		for _, b in ipairs(extracted) do
 			local merged = false
 			for _, rw in ipairs(Hub.Rewards) do
@@ -2617,7 +2744,7 @@ local function onRealItemOrDropEvent(tag, packed)
 			end
 			if not merged then
 				addedAny = true
-				table.insert(Hub.Rewards, 1, {
+				local newRow = {
 					t = meta.t,
 					ts = meta.ts,
 					kind = b.kind,
@@ -2639,11 +2766,16 @@ local function onRealItemOrDropEvent(tag, packed)
 					stageTimer = meta.stageTimer,
 					stageImg = meta.stageImg,
 					stageImageId = meta.stageImageId,
-				})
+				}
+				table.insert(Hub.Rewards, 1, newRow)
+				queuedEntries[#queuedEntries + 1] = newRow
 			end
 		end
 		if addedAny then
 			pruneRewardsTo15()
+			Hub.UnsentRewards = true
+			Hub.PendingQueueSeq = Hub.PendingQueueSeq + 1
+			savePendingRunsQueue(queuedEntries)
 			pcall(Hub.Render)
 			Hub.SyncToWeb(true, "game_finished")
 			uploadBundleAssetsAsync(Hub.Stage, meta.stageName, extracted)
@@ -2798,9 +2930,10 @@ local function onGameFinished(payload)
 		}
 
 		if #bundle > 0 then
+			local newRunRows = {}
 			for idxItem = #bundle, 1, -1 do
 				local b = bundle[idxItem]
-				table.insert(Hub.Rewards, 1, {
+				local row = {
 					t = nowClock,
 					ts = nowMs,
 					kind = b.kind,
@@ -2822,9 +2955,15 @@ local function onGameFinished(payload)
 					stageTimer = stageTimer,
 					stageImg = st.mapImg,
 					stageImageId = st.mapImageId,
-				})
+				}
+				table.insert(Hub.Rewards, 1, row)
+				newRunRows[#newRunRows + 1] = row
 			end
 			pruneRewardsTo15()
+			-- บันทึกรันนี้ลงคิวไฟล์ทันที เผื่อมาโครกดเปลี่ยนด่าน/Teleport ตัดหน้า HTTP ก่อนเซิร์ฟเวอร์ตอบกลับ
+			Hub.UnsentRewards = true
+			Hub.PendingQueueSeq = Hub.PendingQueueSeq + 1
+			savePendingRunsQueue(newRunRows)
 
 			if Hub.Flags.Notify then
 				local summaryParts = {}
@@ -2843,24 +2982,36 @@ local function onGameFinished(payload)
 			Hub.Tab = "reward"
 			pcall(Hub.Render)
 
-			-- ส่งสรุปจบด่านขึ้นเว็บทันที (0 ดีเลย์!) ก่อนที่จะมีการกดเปลี่ยนด่านหรือ Teleport
+			-- ส่งสรุปจบด่านขึ้นเว็บทันที (0 ดีเลย์ + ลองซ้ำอัตโนมัติ 3 ครั้งถ้าติดขัด)
 			Hub.SyncToWeb(true, "game_finished")
 			uploadBundleAssetsAsync(st, stageName, bundle)
 		end
 	end)
 end
 
--- Flush ของดรอปค้างในบัฟเฟอร์ทันทีถ้าผู้เล่นกด Teleport/เปลี่ยนด่านออกจากด่านจริงก่อน game_finished (ห้ามส่งตอนออกจากล็อบบี้)
+-- ติดตามสถานะย้ายเซิร์ฟเวอร์ (OnTeleport): ป้องกันแจ้งหลุดเกมปลอมระหว่างกำลัง Teleport + Flush ของดรอปที่ค้างอยู่
 pcall(function()
 	conn(LP.OnTeleport:Connect(function(state)
-		if state == Enum.TeleportState.Started or state == Enum.TeleportState.InProgress then
+		if state == Enum.TeleportState.RequestedFromServer
+			or state == Enum.TeleportState.Started
+			or state == Enum.TeleportState.WaitingForServer
+			or state == Enum.TeleportState.InProgress then
+			Hub.Teleporting = true
+			Hub.TeleportStartedAt = os.clock()
+			Hub.TeleportGraceUntil = os.clock() + 35
+			-- ยกเลิกการยืนยันหลุดเกมที่กำลังรออยู่ เพราะเป็นการย้ายเซิร์ฟเวอร์ปกติ
+			Hub.PendingDisconnectKey = nil
+			Hub.PendingDisconnectToken = Hub.PendingDisconnectToken + 1
+
 			local st = Hub.Stage or {}
 			if isCurrentlyInLobby(st) then
 				Hub.PendingDrops = {}
+				if Hub.UnsentRewards then Hub.SyncToWeb(true, "pending_flush") end
 				return
 			end
 			if Hub.LastFinishAt and (os.clock() - Hub.LastFinishAt) <= 15 then
 				Hub.PendingDrops = {}
+				if Hub.UnsentRewards then Hub.SyncToWeb(true, "pending_flush") end
 				return
 			end
 			if next(Hub.PendingDrops) ~= nil then
@@ -2868,8 +3019,9 @@ pcall(function()
 				local runId = tostring(os.time()) .. "_" .. tostring(Hub.RunSeq)
 				local nowClock = clock()
 				local nowMs = os.time() * 1000
+				local flushRows = {}
 				for _, pDrop in pairs(Hub.PendingDrops) do
-					table.insert(Hub.Rewards, 1, {
+					local row = {
 						t = nowClock,
 						ts = nowMs,
 						kind = pDrop.kind,
@@ -2890,49 +3042,96 @@ pcall(function()
 						stageWaves = (st.wave and st.wave > 0) and ("Wave " .. tostring(st.wave)) or nil,
 						stageImg = st.mapImg,
 						stageImageId = st.mapImageId,
-					})
+					}
+					table.insert(Hub.Rewards, 1, row)
+					flushRows[#flushRows + 1] = row
 				end
 				Hub.PendingDrops = {}
 				pruneRewardsTo15()
+				Hub.UnsentRewards = true
+				Hub.PendingQueueSeq = Hub.PendingQueueSeq + 1
+				savePendingRunsQueue(flushRows)
 				Hub.SyncToWeb(true, "teleport_flush")
+			elseif Hub.UnsentRewards then
+				Hub.SyncToWeb(true, "pending_flush")
 			end
+		elseif state == Enum.TeleportState.Failed then
+			Hub.Teleporting = false
+			Hub.TeleportGraceUntil = os.clock() + 8
+			Hub.PendingDisconnectKey = nil
+			Hub.PendingDisconnectToken = Hub.PendingDisconnectToken + 1
 		end
 	end))
 end)
 
+pcall(function()
+	if TeleportService and TeleportService.TeleportInitFailed then
+		conn(TeleportService.TeleportInitFailed:Connect(function()
+			Hub.Teleporting = false
+			Hub.TeleportGraceUntil = os.clock() + 8
+			Hub.PendingDisconnectKey = nil
+			Hub.PendingDisconnectToken = Hub.PendingDisconnectToken + 1
+		end))
+	end
+end)
+
 ------------------------------------------------------------------
--- 4.5) DISCONNECT / ERROR PROMPT DETECTOR (แจ้งเว็บ + ออฟไลน์ทันที!)
+-- 4.5) DISCONNECT / ERROR PROMPT DETECTOR (กันย้ายเซิร์ฟเวอร์แจ้งหลุดปลอม + ยืนยัน 2.5 วิ)
 ------------------------------------------------------------------
 local function parseErrorCodeFromText(msg)
 	if type(msg) ~= "string" then return nil end
 	return msg:match("Error Code:%s*(%d+)") or msg:match("Code:%s*(%d+)")
 end
 
-local function triggerDisconnect(title, msg, code)
-	local cleanMsg = tostring(msg or ""):gsub("^%s+", ""):gsub("%s+$", "")
-	local cleanTitle = tostring(title or "Disconnected"):gsub("^%s+", ""):gsub("%s+$", "")
-	if cleanTitle == "" then cleanTitle = "Disconnected" end
-	local cleanCode = code and tostring(code):match("(%d+)") or parseErrorCodeFromText(cleanMsg)
-	if cleanMsg == "" and not cleanCode then return end
-	if cleanMsg == "" then
-		cleanMsg = "Disconnected (Error Code: " .. tostring(cleanCode) .. ")"
+local function isTeleportInProgress()
+	if Hub.Teleporting and (os.clock() - Hub.TeleportStartedAt) < 45 then
+		return true
 	end
-	local key = cleanTitle .. "|" .. cleanMsg .. "|" .. tostring(cleanCode or "")
-	if Hub.DisconnectSentKey == key then return end
-	Hub.DisconnectSentKey = key
-	Hub.Disconnected = true
-	Hub.DisconnectInfo = {
-		title = cleanTitle,
-		message = cleanMsg,
-		errorCode = cleanCode,
-		at = os.time() * 1000,
-	}
-	Hub.SyncStatus = "หลุดจากเกม (" .. (cleanCode and ("Code " .. cleanCode) or "Disconnected") .. ")"
-	pcall(Hub.Render)
-	Hub.SyncToWeb(true, "disconnected")
+	if os.clock() < Hub.TeleportGraceUntil then
+		return true
+	end
+	return false
 end
 
-local function checkDisconnectPrompt()
+local function isTeleportOrTransientPrompt(title, msg, code)
+	local hay = (tostring(title or "") .. " " .. tostring(msg or "")):lower()
+	if hay:find("teleport", 1, true)
+		or hay:find("joining", 1, true)
+		or hay:find("connecting", 1, true)
+		or hay:find("waiting for", 1, true)
+		or hay:find("attempting to", 1, true)
+		or hay:find("server is full", 1, true)
+		or hay:find("game is full", 1, true)
+		or hay:find("restricted", 1, true)
+		or hay:find("retrying", 1, true) then
+		return true
+	end
+	local cNum = tonumber(code)
+	if cNum and cNum >= 769 and cNum <= 779 then
+		return true
+	end
+	return false
+end
+
+local function isDisconnectRelevant(title, msg, code)
+	local cNum = tonumber(code)
+	if cNum and ((cNum >= 256 and cNum <= 299) or cNum == 524 or cNum == 529 or cNum == 610 or cNum == 103 or cNum == 260) then
+		return true
+	end
+	local hay = (tostring(title or "") .. " " .. tostring(msg or "")):lower()
+	return hay:find("disconnect", 1, true) ~= nil
+		or hay:find("kicked", 1, true) ~= nil
+		or hay:find("lost connection", 1, true) ~= nil
+		or hay:find("same account", 1, true) ~= nil
+		or hay:find("idle for", 1, true) ~= nil
+		or hay:find("shut down", 1, true) ~= nil
+		or hay:find("maintenance", 1, true) ~= nil
+		or hay:find("unexpected client", 1, true) ~= nil
+		or hay:find("internet connection", 1, true) ~= nil
+		or hay:find("error code", 1, true) ~= nil
+end
+
+local function readActiveDisconnectPrompt()
 	-- 1) ตรวจผ่าน GuiService.GetErrorMessage / GetErrorCode
 	local okG, gMsg = pcall(function() return GuiService:GetErrorMessage() end)
 	local okC, gCode = pcall(function() return GuiService:GetErrorCode() end)
@@ -2945,34 +3144,121 @@ local function checkDisconnectPrompt()
 		end
 	end
 	if okG and type(gMsg) == "string" and gMsg:match("%S") then
-		triggerDisconnect("Disconnected", gMsg, codeNum or parseErrorCodeFromText(gMsg))
-		return true
+		local c = codeNum or parseErrorCodeFromText(gMsg)
+		if not isTeleportOrTransientPrompt("Disconnected", gMsg, c) and isDisconnectRelevant("Disconnected", gMsg, c) then
+			return "Disconnected", gMsg, c
+		end
 	end
 
-	-- 2) ตรวจหน้าต่าง ErrorPrompt ใน CoreGui.RobloxPromptGui.promptOverlay (เช่น Error Code: 273 / 277 / 278 / 267)
+	-- 2) ตรวจหน้าต่าง ErrorPrompt ที่ "กำลังแสดงจริง (Visible)" ใน CoreGui.RobloxPromptGui.promptOverlay
 	if CoreGui then
 		local rpg = CoreGui:FindFirstChild("RobloxPromptGui")
-		local overlay = rpg and rpg:FindFirstChild("promptOverlay")
-		if overlay then
-			for _, child in ipairs(overlay:GetChildren()) do
-				if child.Name == "ErrorPrompt" or child:FindFirstChild("MessageArea", true) then
-					local titleLbl = idx(child, "TitleFrame.ErrorTitle") or child:FindFirstChild("ErrorTitle", true)
-					local msgLbl = idx(child, "MessageArea.ErrorFrame.ErrorMessage") or child:FindFirstChild("ErrorMessage", true)
-					local tText = (titleLbl and titleLbl:IsA("TextLabel")) and titleLbl.Text or "Disconnected"
-					local mText = (msgLbl and msgLbl:IsA("TextLabel")) and msgLbl.Text or ""
-					if mText == "" then
-						for _, d in ipairs(child:GetDescendants()) do
-							if d:IsA("TextLabel") and d.Text and #d.Text > #mText and d.Text ~= tText and d.Text ~= "Leave" and d.Text ~= "Reconnect" then
-								mText = d.Text
+		if rpg and (not rpg:IsA("ScreenGui") or rpg.Enabled ~= false) then
+			local overlay = rpg:FindFirstChild("promptOverlay")
+			if overlay and isGuiVisible(overlay, rpg) then
+				for _, child in ipairs(overlay:GetChildren()) do
+					if (child.Name == "ErrorPrompt" or child:FindFirstChild("ErrorMessage", true)) and isGuiVisible(child, rpg) then
+						local titleLbl = idx(child, "TitleFrame.ErrorTitle") or child:FindFirstChild("ErrorTitle", true)
+						local msgLbl = idx(child, "MessageArea.ErrorFrame.ErrorMessage") or child:FindFirstChild("ErrorMessage", true)
+						local tText = (titleLbl and titleLbl:IsA("TextLabel")) and titleLbl.Text or "Disconnected"
+						local mText = (msgLbl and msgLbl:IsA("TextLabel")) and msgLbl.Text or ""
+						if mText == "" then
+							for _, d in ipairs(child:GetDescendants()) do
+								if d:IsA("TextLabel") and isGuiVisible(d, rpg) and d.Text and #d.Text > #mText and d.Text ~= tText and d.Text ~= "Leave" and d.Text ~= "Reconnect" then
+									mText = d.Text
+								end
+							end
+						end
+						if mText ~= "" then
+							local c = parseErrorCodeFromText(mText) or codeNum
+							if not isTeleportOrTransientPrompt(tText, mText, c) and isDisconnectRelevant(tText, mText, c) then
+								return tText, mText, c
 							end
 						end
 					end
-					if mText ~= "" then
-						triggerDisconnect(tText, mText, parseErrorCodeFromText(mText) or codeNum)
-						return true
-					end
 				end
 			end
+		end
+	end
+	return nil, nil, nil
+end
+
+local function commitDisconnect(title, msg, code)
+	if isTeleportInProgress() then return end
+	local cleanMsg = tostring(msg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local cleanTitle = tostring(title or "Disconnected"):gsub("^%s+", ""):gsub("%s+$", "")
+	if cleanTitle == "" then cleanTitle = "Disconnected" end
+	local cleanCode = code and tostring(code):match("(%d+)") or parseErrorCodeFromText(cleanMsg)
+	if cleanMsg == "" and not cleanCode then return end
+	if isTeleportOrTransientPrompt(cleanTitle, cleanMsg, cleanCode) then return end
+	if cleanMsg == "" then
+		cleanMsg = "Disconnected (Error Code: " .. tostring(cleanCode) .. ")"
+	end
+	local key = cleanTitle .. "|" .. cleanMsg .. "|" .. tostring(cleanCode or "")
+	if Hub.DisconnectSentKey == key then return end
+	Hub.DisconnectSentKey = key
+	Hub.Disconnected = true
+	Hub.ClearPromptStreak = 0
+	Hub.DisconnectInfo = {
+		title = cleanTitle,
+		message = cleanMsg,
+		errorCode = cleanCode,
+		at = os.time() * 1000,
+	}
+	Hub.SyncStatus = "หลุดจากเกม (" .. (cleanCode and ("Code " .. cleanCode) or "Disconnected") .. ")"
+	pcall(Hub.Render)
+	Hub.SyncToWeb(true, "disconnected")
+end
+
+local function scheduleDisconnect(title, msg, code)
+	if isTeleportInProgress() then return end
+	local cleanMsg = tostring(msg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	local cleanTitle = tostring(title or "Disconnected"):gsub("^%s+", ""):gsub("%s+$", "")
+	local cleanCode = code and tostring(code):match("(%d+)") or parseErrorCodeFromText(cleanMsg)
+	if cleanMsg == "" and not cleanCode then return end
+	if isTeleportOrTransientPrompt(cleanTitle, cleanMsg, cleanCode) then return end
+	local key = cleanTitle .. "|" .. cleanMsg .. "|" .. tostring(cleanCode or "")
+	if Hub.DisconnectSentKey == key or Hub.PendingDisconnectKey == key then return end
+
+	Hub.PendingDisconnectKey = key
+	Hub.PendingDisconnectToken = Hub.PendingDisconnectToken + 1
+	local myToken = Hub.PendingDisconnectToken
+
+	-- รอยืนยัน 2.5 วินาทีเพื่อให้แน่ใจว่าหลุดเกมจริง ไม่ใช่หน้าต่างชั่วคราวตอนกำลังย้ายเซิร์ฟเวอร์
+	task.delay(2.5, function()
+		if not Hub.Running or Hub.PendingDisconnectToken ~= myToken then return end
+		Hub.PendingDisconnectKey = nil
+		if isTeleportInProgress() then return end
+		local activeT, activeM, activeC = readActiveDisconnectPrompt()
+		if activeM then
+			commitDisconnect(activeT or cleanTitle, activeM, activeC or cleanCode)
+		end
+	end)
+end
+
+local function checkDisconnectPrompt()
+	if isTeleportInProgress() then
+		Hub.PendingDisconnectKey = nil
+		return false
+	end
+	local tText, mText, cNum = readActiveDisconnectPrompt()
+	if mText then
+		Hub.ClearPromptStreak = 0
+		scheduleDisconnect(tText, mText, cNum)
+		return true
+	end
+	-- ถ้าไม่พบหน้าต่างหลุดเกมแล้ว ยกเลิก pending และกู้คืนสถานะออนไลน์อัตโนมัติถ้าเคยติดค้าง
+	Hub.PendingDisconnectKey = nil
+	if Hub.Disconnected then
+		Hub.ClearPromptStreak = Hub.ClearPromptStreak + 1
+		if Hub.ClearPromptStreak >= 3 then
+			Hub.Disconnected = false
+			Hub.DisconnectInfo = nil
+			Hub.DisconnectSentKey = nil
+			Hub.ClearPromptStreak = 0
+			Hub.SyncStatus = "กลับมาเชื่อมต่อปกติ • กำลังซิงค์..."
+			pcall(Hub.Render)
+			Hub.SyncToWeb(true, "recovered")
 		end
 	end
 	return false
@@ -2980,8 +3266,12 @@ end
 
 pcall(function()
 	conn(GuiService.ErrorMessageChanged:Connect(function(msg)
+		if isTeleportInProgress() then return end
 		if type(msg) == "string" and msg:match("%S") then
-			triggerDisconnect("Disconnected", msg, parseErrorCodeFromText(msg))
+			local c = parseErrorCodeFromText(msg)
+			if not isTeleportOrTransientPrompt("Disconnected", msg, c) and isDisconnectRelevant("Disconnected", msg, c) then
+				scheduleDisconnect("Disconnected", msg, c)
+			end
 		else
 			pcall(checkDisconnectPrompt)
 		end
@@ -3027,32 +3317,79 @@ pcall(function()
 	end
 end)
 
--- Hook 4 RemoteEvent จริงของเกม (2K v10 — ไม่มีเดา diff ไม่มีสแกน ResultsUI)
-local endpoints = RS:FindFirstChild("endpoints")
-local S2C = endpoints and endpoints:FindFirstChild("server_to_client")
-local function hookEvent(name, fn)
-	if not S2C then return end
-	local ev = S2C:FindFirstChild(name)
-	if ev and ev:IsA("RemoteEvent") then
-		conn(ev.OnClientEvent:Connect(function(...)
-			local args = table.pack(...)
-			pcall(fn, args)
-		end))
-	end
+-- Hook 4 RemoteEvent จริงของเกม (รอ WaitForChild + ChildAdded กันพลาดตอน Auto-Execute เข้าเซิร์ฟใหม่เร็วกว่าโหลด endpoints)
+local function attachRemoteEvent(ev, fn)
+	if not ev or not ev:IsA("RemoteEvent") or Hub.HookedEvents[ev] then return end
+	Hub.HookedEvents[ev] = true
+	conn(ev.OnClientEvent:Connect(function(...)
+		local args = table.pack(...)
+		pcall(fn, args)
+	end))
 end
 
-hookEvent("game_finished", function(args)
-	onGameFinished(args[1] or args[2])
-end)
-hookEvent("show_unit_and_item_rewards", function(args)
-	onRealItemOrDropEvent("show_unit_and_item_rewards", args)
-end)
-hookEvent("show_drop_message", function(args)
-	onRealItemOrDropEvent("show_drop_message", args)
-end)
-hookEvent("show_drop_message_custom", function(args)
-	onRealItemOrDropEvent("show_drop_message_custom", args)
-end)
+local EVENT_HANDLERS = {
+	game_finished = function(args)
+		local payload = nil
+		local count = tonumber(args.n) or #args
+		for i = 1, math.max(count, 2) do
+			if type(args[i]) == "table" then
+				payload = args[i]
+				break
+			end
+		end
+		if not payload then
+			payload = {
+				victory = (type(args[1]) == "boolean") and args[1] or nil,
+				title = (type(args[1]) == "string") and args[1] or ((type(args[2]) == "string") and args[2] or nil),
+			}
+		end
+		onGameFinished(payload)
+	end,
+	show_unit_and_item_rewards = function(args)
+		onRealItemOrDropEvent("show_unit_and_item_rewards", args)
+	end,
+	show_drop_message = function(args)
+		onRealItemOrDropEvent("show_drop_message", args)
+	end,
+	show_drop_message_custom = function(args)
+		onRealItemOrDropEvent("show_drop_message_custom", args)
+	end,
+}
+
+local function bindS2CFolder(s2c)
+	if not s2c then return end
+	for evName, handler in pairs(EVENT_HANDLERS) do
+		local ev = s2c:FindFirstChild(evName)
+		if ev then attachRemoteEvent(ev, handler) end
+	end
+	conn(s2c.ChildAdded:Connect(function(ch)
+		local handler = EVENT_HANDLERS[ch.Name]
+		if handler then attachRemoteEvent(ch, handler) end
+	end))
+end
+
+do
+	local epNow = RS:FindFirstChild("endpoints")
+	local s2cNow = epNow and epNow:FindFirstChild("server_to_client")
+	if s2cNow then
+		bindS2CFolder(s2cNow)
+	end
+	task.spawn(function()
+		local ep = RS:FindFirstChild("endpoints") or RS:WaitForChild("endpoints", 45)
+		if not ep or not Hub.Running then return end
+		local s2c = ep:FindFirstChild("server_to_client") or ep:WaitForChild("server_to_client", 45)
+		if not s2c or not Hub.Running then return end
+		bindS2CFolder(s2c)
+		for evName, handler in pairs(EVENT_HANDLERS) do
+			if not s2c:FindFirstChild(evName) then
+				task.spawn(function()
+					local ev = s2c:WaitForChild(evName, 45)
+					if ev and Hub.Running then attachRemoteEvent(ev, handler) end
+				end)
+			end
+		end
+	end)
+end
 
 ------------------------------------------------------------------
 -- 5) TOAST NOTIFICATION (แสดงพร้อมรูปด่าน/ไอเทมจริง)
@@ -3172,8 +3509,12 @@ task.spawn(function()
 	end
 end)
 
--- ลูป 2: รอให้ข้อมูลโหลดเสร็จก่อนส่งครั้งแรก (กันเวลาย้ายเซิฟรีเป็น 0) + Heartbeat ตามรอบ AUTO_SYNC_SEC
+-- ลูป 2: กู้คิวรางวัลจบด่านที่ค้างจากเซิร์ฟก่อนหน้า + รอโหลดข้อมูลเสร็จก่อนส่งครั้งแรก + Heartbeat & Retry คิวค้าง
 task.spawn(function()
+	local restoredCount = restorePendingRunsQueue()
+	if restoredCount > 0 then
+		pruneRewardsTo15()
+	end
 	local waitedLoad = 0
 	while Hub.Running and not Hub.Disconnected and waitedLoad < 12 do
 		pcall(Hub.SnapStats)
@@ -3189,7 +3530,7 @@ task.spawn(function()
 	if Hub.Running and not Hub.Disconnected then
 		pcall(Hub.UpdateLocation)
 		pcall(Hub.Render)
-		Hub.SyncToWeb(true, "startup")
+		Hub.SyncToWeb(true, restoredCount > 0 and "pending_flush" or "startup")
 	end
 	task.delay(4, function()
 		if Hub.Running and not Hub.Disconnected then pcall(Hub.ScanAndUploadGameAssets, false) end
@@ -3197,9 +3538,12 @@ task.spawn(function()
 	while Hub.Running do
 		task.wait(5)
 		if not Hub.Running then break end
-		if Hub.Disconnected then break end
-		if not Hub.HttpBlocked and (os.clock() - Hub.LastSync) >= AUTO_SYNC_SEC then
-			pcall(Hub.SyncToWeb, true, "heartbeat")
+		if not Hub.Disconnected and not Hub.HttpBlocked then
+			if Hub.UnsentRewards then
+				pcall(Hub.SyncToWeb, true, "pending_flush")
+			elseif (os.clock() - Hub.LastSync) >= AUTO_SYNC_SEC then
+				pcall(Hub.SyncToWeb, true, "heartbeat")
+			end
 		end
 	end
 end)
